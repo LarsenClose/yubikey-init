@@ -1,0 +1,646 @@
+/* YubiKey Manager TUI Styles
+ *
+ * A clean, professional color scheme for YubiKey management.
+ * Uses a dark theme with accent colors for status indicators.
+ */
+
+/* ============================================================================
+ * Global Styles
+ * ============================================================================ */
+
+Screen {
+    background: $surface;
+}
+
+/* ============================================================================
+ * Layout Containers
+ * ============================================================================ */
+
+#main-container {
+    width: 100%;
+    height: 100%;
+    align: center middle;
+    padding: 1 2;
+}
+
+.content-panel {
+    width: 80%;
+    max-width: 80;
+    min-width: 60;
+    height: auto;
+    max-height: 90%;
+    border: solid $primary;
+    background: $surface;
+    padding: 1 2;
+}
+
+.full-width-panel {
+    width: 100%;
+    height: 100%;
+    padding: 1 2;
+}
+
+/* Centered content wrapper */
+.centered-content {
+    width: 100%;
+    height: auto;
+    align: center middle;
+}
+
+/* ============================================================================
+ * Main Menu Styles
+ * ============================================================================ */
+
+#main-menu-container {
+    width: 100%;
+    height: 100%;
+    align: center middle;
+}
+
+#menu-panel {
+    width: 60;
+    height: auto;
+    border: round $primary;
+    background: $surface;
+    padding: 1 2;
+}
+
+#menu-title {
+    text-align: center;
+    text-style: bold;
+    color: $text;
+    padding-bottom: 1;
+    border-bottom: solid $primary-lighten-2;
+    margin-bottom: 1;
+}
+
+.menu-item {
+    width: 100%;
+    height: 3;
+    padding: 0 2;
+    margin: 0 0 1 0;
+    background: $surface;
+    border: none;
+    text-align: left;
+}
+
+.menu-item:hover {
+    background: $primary-darken-1;
+}
+
+.menu-item:focus {
+    background: $primary;
+    text-style: bold;
+}
+
+.menu-item.-disabled {
+    color: $text-muted;
+}
+
+.menu-shortcut {
+    color: $accent;
+    text-style: bold;
+}
+
+.menu-description {
+    color: $text-muted;
+    padding-left: 2;
+}
+
+/* ============================================================================
+ * List Screen Styles (Devices, Keys)
+ * ============================================================================ */
+
+#list-container {
+    width: 100%;
+    height: 100%;
+    padding: 1 2;
+}
+
+#list-panel {
+    width: 100%;
+    height: 100%;
+    border: round $primary;
+    background: $surface;
+    padding: 1;
+}
+
+#list-title {
+    text-align: center;
+    text-style: bold;
+    color: $text;
+    padding-bottom: 1;
+    border-bottom: solid $primary-lighten-2;
+    margin-bottom: 1;
+}
+
+/* ============================================================================
+ * Data Table Styles
+ * ============================================================================ */
+
+DataTable {
+    height: auto;
+    max-height: 100%;
+    scrollbar-gutter: stable;
+}
+
+DataTable > .datatable--header {
+    background: $primary-darken-2;
+    color: $text;
+    text-style: bold;
+}
+
+DataTable > .datatable--header-hover {
+    background: $primary-darken-1;
+}
+
+DataTable > .datatable--cursor {
+    background: $primary;
+    color: $text;
+}
+
+DataTable > .datatable--hover {
+    background: $surface-lighten-1;
+}
+
+DataTable > .datatable--even-row {
+    background: $surface;
+}
+
+DataTable > .datatable--odd-row {
+    background: $surface-darken-1;
+}
+
+/* ============================================================================
+ * Detail Screen Styles
+ * ============================================================================ */
+
+#detail-container {
+    width: 100%;
+    height: 100%;
+    padding: 1 2;
+}
+
+#detail-panel {
+    width: 100%;
+    height: 100%;
+    border: round $primary;
+    background: $surface;
+    padding: 1 2;
+}
+
+#detail-title {
+    text-align: center;
+    text-style: bold;
+    color: $text;
+    padding-bottom: 1;
+    border-bottom: solid $primary-lighten-2;
+    margin-bottom: 1;
+}
+
+.detail-section {
+    margin-top: 1;
+    margin-bottom: 1;
+}
+
+.section-header {
+    text-style: bold;
+    color: $primary-lighten-1;
+    padding-bottom: 0;
+    margin-bottom: 0;
+}
+
+.detail-row {
+    height: 1;
+    padding: 0 1;
+}
+
+.detail-label {
+    width: 20;
+    color: $text-muted;
+}
+
+.detail-value {
+    color: $text;
+}
+
+/* ============================================================================
+ * Status Indicators
+ * ============================================================================ */
+
+.status-ok {
+    color: $success;
+}
+
+.status-warning {
+    color: $warning;
+}
+
+.status-error {
+    color: $error;
+}
+
+.status-blocked {
+    color: $error;
+    text-style: bold;
+}
+
+.status-ready {
+    color: $success;
+}
+
+.status-expiring {
+    color: $warning;
+    text-style: italic;
+}
+
+/* Status indicator styles */
+.indicator-ok {
+    color: $success;
+}
+
+.indicator-warning {
+    color: $warning;
+}
+
+.indicator-error {
+    color: $error;
+}
+
+/* ============================================================================
+ * Action Bar Styles
+ * ============================================================================ */
+
+#action-bar {
+    dock: bottom;
+    width: 100%;
+    height: 3;
+    background: $surface-darken-2;
+    border-top: solid $primary-darken-2;
+    padding: 0 2;
+}
+
+.action-button {
+    min-width: 12;
+    margin-right: 1;
+}
+
+.action-button:focus {
+    background: $primary;
+}
+
+.action-button.-destructive {
+    background: $error-darken-2;
+}
+
+.action-button.-destructive:hover {
+    background: $error-darken-1;
+}
+
+.action-button.-destructive:focus {
+    background: $error;
+}
+
+/* ============================================================================
+ * Confirmation Dialog Styles
+ * ============================================================================ */
+
+ConfirmDialog {
+    align: center middle;
+}
+
+#confirm-dialog-container {
+    width: 60;
+    height: auto;
+    max-height: 80%;
+    border: thick $warning;
+    background: $surface;
+    padding: 1 2;
+}
+
+#confirm-dialog-container.-destructive {
+    border: thick $error;
+}
+
+#confirm-title {
+    text-align: center;
+    text-style: bold;
+    color: $warning;
+    padding-bottom: 1;
+}
+
+#confirm-title.-destructive {
+    color: $error;
+}
+
+#confirm-message {
+    padding: 1 0;
+    text-align: center;
+}
+
+#confirm-details {
+    background: $surface-darken-1;
+    border: solid $primary-darken-2;
+    padding: 1;
+    margin: 1 0;
+}
+
+#confirm-input-label {
+    padding-top: 1;
+    text-align: center;
+    color: $text-muted;
+}
+
+#confirm-input {
+    margin: 1 2;
+    border: solid $primary;
+}
+
+#confirm-input:focus {
+    border: solid $accent;
+}
+
+#confirm-buttons {
+    width: 100%;
+    height: 3;
+    align: center middle;
+    margin-top: 1;
+}
+
+#confirm-cancel {
+    margin-right: 2;
+}
+
+#confirm-proceed {
+    background: $error-darken-1;
+}
+
+#confirm-proceed:hover {
+    background: $error;
+}
+
+/* ============================================================================
+ * Diagnostics Screen Styles
+ * ============================================================================ */
+
+#diagnostics-container {
+    width: 100%;
+    height: 100%;
+    padding: 1 2;
+}
+
+#diagnostics-panel {
+    width: 100%;
+    height: 100%;
+    border: round $primary;
+    background: $surface;
+    padding: 1 2;
+    overflow-y: auto;
+}
+
+#diagnostics-title {
+    text-align: center;
+    text-style: bold;
+    color: $text;
+    padding-bottom: 1;
+    border-bottom: solid $primary-lighten-2;
+    margin-bottom: 1;
+}
+
+.diagnostics-section {
+    margin-top: 1;
+    padding-bottom: 1;
+    border-bottom: dashed $surface-lighten-2;
+}
+
+.diagnostics-section:last-child {
+    border-bottom: none;
+}
+
+.check-item {
+    height: 1;
+    padding: 0 1;
+}
+
+.check-icon {
+    width: 3;
+}
+
+.check-icon.-pass {
+    color: $success;
+}
+
+.check-icon.-warn {
+    color: $warning;
+}
+
+.check-icon.-fail {
+    color: $error;
+}
+
+.check-text {
+    color: $text;
+}
+
+/* ============================================================================
+ * Loading and Progress Styles
+ * ============================================================================ */
+
+#loading-container {
+    width: 100%;
+    height: 100%;
+    align: center middle;
+}
+
+#loading-message {
+    text-align: center;
+    color: $text-muted;
+    text-style: italic;
+}
+
+LoadingIndicator {
+    background: transparent;
+}
+
+/* ============================================================================
+ * Message and Notification Styles
+ * ============================================================================ */
+
+.info-message {
+    background: $primary-darken-2;
+    border: solid $primary;
+    padding: 1;
+    margin: 1 0;
+}
+
+.warning-message {
+    background: $warning-darken-3;
+    border: solid $warning;
+    padding: 1;
+    margin: 1 0;
+}
+
+.error-message {
+    background: $error-darken-3;
+    border: solid $error;
+    padding: 1;
+    margin: 1 0;
+}
+
+.success-message {
+    background: $success-darken-3;
+    border: solid $success;
+    padding: 1;
+    margin: 1 0;
+}
+
+/* ============================================================================
+ * Key Slot Display Styles
+ * ============================================================================ */
+
+.key-slot-container {
+    margin: 0 0 1 0;
+    padding: 0 1;
+}
+
+.key-slot-name {
+    width: 15;
+    color: $text-muted;
+}
+
+.key-slot-fingerprint {
+    color: $text;
+    text-style: italic;
+}
+
+.key-slot-policy {
+    color: $accent;
+    padding-left: 1;
+}
+
+.key-slot-empty {
+    color: $text-muted;
+    text-style: italic;
+}
+
+/* ============================================================================
+ * PIN Status Styles
+ * ============================================================================ */
+
+.pin-status {
+    padding: 0 1;
+}
+
+.pin-tries {
+    color: $text;
+}
+
+.pin-tries.-low {
+    color: $warning;
+}
+
+.pin-tries.-blocked {
+    color: $error;
+    text-style: bold;
+}
+
+/* ============================================================================
+ * Protected Device Indicator
+ * ============================================================================ */
+
+.protected-badge {
+    color: $warning;
+    text-style: bold;
+}
+
+.protected-icon {
+    color: $warning;
+}
+
+/* ============================================================================
+ * Empty State Styles
+ * ============================================================================ */
+
+.empty-state {
+    width: 100%;
+    height: auto;
+    min-height: 10;
+    align: center middle;
+    padding: 2;
+}
+
+.empty-state-message {
+    text-align: center;
+    color: $text-muted;
+    text-style: italic;
+}
+
+.empty-state-hint {
+    text-align: center;
+    color: $text-muted;
+    padding-top: 1;
+}
+
+/* ============================================================================
+ * Scrollable Container Styles
+ * ============================================================================ */
+
+.scrollable-content {
+    overflow-y: auto;
+    scrollbar-gutter: stable;
+}
+
+VerticalScroll {
+    scrollbar-gutter: stable;
+}
+
+/* ============================================================================
+ * Tooltip / Help Styles
+ * ============================================================================ */
+
+.help-text {
+    color: $text-muted;
+    text-style: italic;
+    padding: 0 1;
+}
+
+.shortcut-hint {
+    color: $accent;
+}
+
+/* ============================================================================
+ * Rule / Divider Styles
+ * ============================================================================ */
+
+Rule {
+    color: $primary-darken-2;
+    margin: 1 0;
+}
+
+Rule.-dashed {
+    border-top: dashed $primary-darken-2;
+}
+
+/* ============================================================================
+ * Focus and Selection Styles
+ * ============================================================================ */
+
+*:focus {
+    border: solid $accent;
+}
+
+Button:focus {
+    background: $primary;
+    border: solid $accent;
+}
+
+Input:focus {
+    border: solid $accent;
+}
+
+/* ============================================================================
+ * Responsive Adjustments
+ * ============================================================================ */
+
+/* Note: Textual CSS does not support @media queries like web CSS.
+   Width adjustments are handled programmatically in the app. */
