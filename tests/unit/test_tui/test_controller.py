@@ -567,7 +567,9 @@ class TestTUIController:
         assert result.unwrap() == "ssh-rsa AAAA..."
         mock_gpg_ops.export_ssh_key.assert_called_once_with("ABCDEF1234567890")
 
-    def test_export_ssh_key_with_selected_key(self, controller: TUIController, mock_gpg_ops) -> None:
+    def test_export_ssh_key_with_selected_key(
+        self, controller: TUIController, mock_gpg_ops
+    ) -> None:
         """Test export_ssh_key uses selected key from state."""
         controller.state.selected_key = "ABCDEF1234567890"
         mock_gpg_ops.export_ssh_key.return_value = Result.ok("ssh-rsa AAAA...")
@@ -584,7 +586,9 @@ class TestTUIController:
 
     def test_get_key_fingerprint_with_key_id(self, controller: TUIController, mock_gpg_ops) -> None:
         """Test get_key_fingerprint with explicit key ID."""
-        mock_gpg_ops.get_key_fingerprint.return_value = Result.ok("ABCDEF1234567890ABCDEF1234567890")
+        mock_gpg_ops.get_key_fingerprint.return_value = Result.ok(
+            "ABCDEF1234567890ABCDEF1234567890"
+        )
 
         result = controller.get_key_fingerprint(key_id="ABCDEF1234567890")
         assert result.is_ok()
@@ -732,9 +736,7 @@ class TestTUIController:
         result = controller.set_device_notes("12345678", "")
         assert result.is_ok()
 
-    def test_get_keys_with_expired_key(
-        self, controller: TUIController, mock_gpg_ops
-    ) -> None:
+    def test_get_keys_with_expired_key(self, controller: TUIController, mock_gpg_ops) -> None:
         """Test get_keys correctly identifies expired keys."""
         past_date = datetime(2020, 1, 1, tzinfo=UTC)
         mock_gpg_ops.list_secret_keys.return_value = Result.ok(
@@ -754,9 +756,7 @@ class TestTUIController:
         assert len(keys) == 1
         assert keys[0].is_expired is True
 
-    def test_get_keys_expiring_soon(
-        self, controller: TUIController, mock_gpg_ops
-    ) -> None:
+    def test_get_keys_expiring_soon(self, controller: TUIController, mock_gpg_ops) -> None:
         """Test get_keys correctly calculates days until expiry."""
         from datetime import timedelta
 

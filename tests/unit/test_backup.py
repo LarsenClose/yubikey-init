@@ -718,9 +718,7 @@ class TestCreateFullBackup:
 
     @patch("shutil.which")
     @patch("yubikey_init.backup.create_backup_directory")
-    def test_create_full_backup_with_paperkey_and_ssh(
-        self, mock_create_dir, mock_which, tmp_path
-    ):
+    def test_create_full_backup_with_paperkey_and_ssh(self, mock_create_dir, mock_which, tmp_path):
         """Test create_full_backup with paperkey and SSH export (lines 313-325)."""
         from datetime import UTC, datetime
 
