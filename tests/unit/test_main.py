@@ -4138,7 +4138,6 @@ class TestCmdManage:
 
     def test_cmd_manage_success(self) -> None:
         """Test cmd_manage launches TUI successfully."""
-        from yubikey_init.main import cmd_manage
 
         args = argparse.Namespace()
 

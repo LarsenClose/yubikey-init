@@ -509,7 +509,6 @@ class TestReadbackVerifyBackupExtended:
 
     def test_readback_verify_backup_checksum_failure(self, tmp_path):
         """Test readback_verify_backup fails when checksums fail (line 740)."""
-        import hashlib
         import json
 
         from yubikey_init.backup import readback_verify_backup

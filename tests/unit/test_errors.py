@@ -418,7 +418,6 @@ class TestErrorLoggerWithContent:
 
     def test_get_recent_errors_with_content(self) -> None:
         """Test get_recent_errors returns lines from populated log."""
-        import logging
 
         with tempfile.TemporaryDirectory() as tmpdir:
             log_path = Path(tmpdir) / "errors.log"

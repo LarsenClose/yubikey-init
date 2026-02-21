@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from yubikey_init.tui import create_app, run, run_tui
 from yubikey_init.tui.app import YubiKeyManagerApp
 
