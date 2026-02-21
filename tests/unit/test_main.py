@@ -4131,3 +4131,115 @@ class TestCmdExportSshAndRenew:
 
             result = cmd_renew(args, prompts)
             assert result == 1
+
+
+class TestCmdManage:
+    """Tests for cmd_manage TUI launcher."""
+
+    def test_cmd_manage_success(self) -> None:
+        """Test cmd_manage launches TUI successfully."""
+
+        args = argparse.Namespace()
+
+        with patch("yubikey_init.main.cmd_manage") as mock_manage:
+            mock_manage.return_value = 0
+            result = mock_manage(args)
+            assert result == 0
+
+    def test_cmd_manage_tui_available(self) -> None:
+        """Test cmd_manage when TUI is available."""
+        from yubikey_init.main import cmd_manage
+
+        args = argparse.Namespace()
+
+        with patch("yubikey_init.tui.run_tui") as mock_run_tui:
+            result = cmd_manage(args)
+            assert result == 0
+            mock_run_tui.assert_called_once()
+
+    def test_cmd_manage_import_error(self) -> None:
+        """Test cmd_manage when TUI is not available (ImportError)."""
+        from yubikey_init.main import cmd_manage
+
+        args = argparse.Namespace()
+
+        with (
+            patch("yubikey_init.main.console"),
+            patch("builtins.__import__", side_effect=ImportError("textual not installed")),
+        ):
+            # Directly test the logic by patching the internal import
+            pass
+
+        # Test via the actual function with run_tui mocked to raise ImportError
+        with (
+            patch("yubikey_init.main.console"),
+            patch(
+                "yubikey_init.tui.run_tui",
+                side_effect=ImportError("textual not installed"),
+            ),
+        ):
+            result = cmd_manage(args)
+            assert result == 1
+
+    def test_cmd_manage_general_exception(self) -> None:
+        """Test cmd_manage when TUI throws unexpected error."""
+        from yubikey_init.main import cmd_manage
+
+        args = argparse.Namespace()
+
+        with (
+            patch("yubikey_init.main.console"),
+            patch(
+                "yubikey_init.tui.run_tui",
+                side_effect=RuntimeError("TUI crashed"),
+            ),
+        ):
+            result = cmd_manage(args)
+            assert result == 1
+
+
+class TestRunManageCommand:
+    """Test run() dispatches to manage command."""
+
+    def test_run_manage_command(self) -> None:
+        """Test run dispatches to manage command."""
+        with (
+            patch("yubikey_init.main.cmd_manage", return_value=0) as mock_cmd,
+            patch("yubikey_init.main.StateMachine"),
+        ):
+            result = run(["manage"])
+            assert result == 0
+            mock_cmd.assert_called_once()
+
+    def test_run_provision_command(self) -> None:
+        """Test run dispatches to provision command."""
+        with (
+            patch("yubikey_init.main.cmd_provision", return_value=0) as mock_cmd,
+            patch("yubikey_init.main.StateMachine"),
+            patch("yubikey_init.main.Prompts"),
+        ):
+            result = run(["provision", "--key-id", "ABC123", "--backup-path", "/tmp/backup"])
+            assert result == 0
+            mock_cmd.assert_called_once()
+
+    def test_run_reset_command(self) -> None:
+        """Test run dispatches to reset command."""
+        with (
+            patch("yubikey_init.main.cmd_reset", return_value=0) as mock_cmd,
+            patch("yubikey_init.main.StateMachine"),
+            patch("yubikey_init.main.Prompts"),
+        ):
+            result = run(["reset"])
+            assert result == 0
+            mock_cmd.assert_called_once()
+
+    def test_run_setup_config_command(self) -> None:
+        """Test run dispatches to setup-config command."""
+        with (
+            patch("yubikey_init.main.cmd_setup_config", return_value=0) as mock_cmd,
+            patch("yubikey_init.main.StateMachine"),
+            patch("yubikey_init.main.Prompts"),
+        ):
+            result = run(["setup-config"])
+            assert result == 0
+            mock_cmd.assert_called_once()

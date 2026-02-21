@@ -322,6 +322,265 @@ class TestRestoreFromPaperkey:
         assert result.is_err()
 
 
+class TestCopyPublicFilesToPartitionExtended:
+    """Additional tests for copy_public_files_to_partition function."""
+
+    def test_copy_public_files_oserror(self, tmp_path):
+        """Test that OSError during copy returns error."""
+        backup_path = tmp_path / "backup"
+        backup_path.mkdir()
+        public_mount = tmp_path / "public"
+        public_mount.mkdir()
+
+        # Create the source file
+        (backup_path / "public-key.asc").write_text("public key data")
+
+        # Patch shutil.copy2 to raise OSError
+        with patch("yubikey_init.backup.shutil.copy2", side_effect=OSError("Permission denied")):
+            result = copy_public_files_to_partition(backup_path, public_mount)
+
+        assert result.is_err()
+        assert "Failed to copy" in str(result.unwrap_err())
+
+
+class TestVerifyBackupChecksumsExtended:
+    """Additional tests for verify_backup_checksums function."""
+
+    def test_verify_backup_checksums_no_manifest(self, tmp_path):
+        """Test verify_backup_checksums fails without manifest."""
+        from yubikey_init.backup import verify_backup_checksums
+
+        result = verify_backup_checksums(tmp_path)
+        assert result.is_err()
+        assert "Manifest" in str(result.unwrap_err())
+
+    def test_verify_backup_checksums_invalid_json(self, tmp_path):
+        """Test verify_backup_checksums fails with invalid JSON."""
+        from yubikey_init.backup import verify_backup_checksums
+
+        (tmp_path / "manifest.json").write_text("not valid json")
+        result = verify_backup_checksums(tmp_path)
+        assert result.is_err()
+
+    def test_verify_backup_checksums_with_subdirectory_filename(self, tmp_path):
+        """Test verify_backup_checksums handles files in subdirectories (line 714)."""
+        import hashlib
+        import json
+
+        from yubikey_init.backup import verify_backup_checksums
+
+        # Create a subdirectory file
+        subdir = tmp_path / "gnupghome"
+        subdir.mkdir()
+        test_file = subdir / "pubring.kbx"
+        content = b"test key data"
+        test_file.write_bytes(content)
+
+        sha256 = hashlib.sha256(content).hexdigest()
+
+        # Create manifest with subdirectory-style checksum entry
+        manifest_data = {
+            "version": "2.0.0",
+            "created_at": "2024-01-01T12:00:00+00:00",
+            "key_id": "ABCD1234",
+            "fingerprint": "FP",
+            "identity": "Test",
+            "files": ["gnupghome/"],
+            "backup_path": str(tmp_path),
+            "checksums": [
+                {
+                    "filename": "gnupghome/pubring.kbx",
+                    "sha256": sha256,
+                    "size_bytes": len(content),
+                }
+            ],
+            "gnupghome_included": True,
+        }
+        (tmp_path / "manifest.json").write_text(json.dumps(manifest_data))
+
+        result = verify_backup_checksums(tmp_path)
+        assert result.is_ok()
+        assert result.unwrap() == []
+
+    def test_verify_backup_checksums_missing_file(self, tmp_path):
+        """Test verify_backup_checksums reports missing files."""
+        import json
+
+        from yubikey_init.backup import verify_backup_checksums
+
+        manifest_data = {
+            "version": "2.0.0",
+            "created_at": "2024-01-01T12:00:00+00:00",
+            "key_id": "ABCD1234",
+            "fingerprint": "FP",
+            "identity": "Test",
+            "files": [],
+            "backup_path": str(tmp_path),
+            "checksums": [
+                {
+                    "filename": "master-key.asc",
+                    "sha256": "deadbeef",
+                    "size_bytes": 100,
+                }
+            ],
+            "gnupghome_included": False,
+        }
+        (tmp_path / "manifest.json").write_text(json.dumps(manifest_data))
+
+        result = verify_backup_checksums(tmp_path)
+        assert result.is_ok()
+        failed = result.unwrap()
+        assert len(failed) == 1
+        assert "missing" in failed[0]
+
+    def test_verify_backup_checksums_checksum_mismatch(self, tmp_path):
+        """Test verify_backup_checksums reports checksum mismatch."""
+        import json
+
+        from yubikey_init.backup import verify_backup_checksums
+
+        # Create the file with known content
+        (tmp_path / "master-key.asc").write_bytes(b"actual content")
+
+        manifest_data = {
+            "version": "2.0.0",
+            "created_at": "2024-01-01T12:00:00+00:00",
+            "key_id": "ABCD1234",
+            "fingerprint": "FP",
+            "identity": "Test",
+            "files": [],
+            "backup_path": str(tmp_path),
+            "checksums": [
+                {
+                    "filename": "master-key.asc",
+                    "sha256": "wrongsha256hash",
+                    "size_bytes": 14,  # correct size
+                }
+            ],
+            "gnupghome_included": False,
+        }
+        (tmp_path / "manifest.json").write_text(json.dumps(manifest_data))
+
+        result = verify_backup_checksums(tmp_path)
+        assert result.is_ok()
+        failed = result.unwrap()
+        assert len(failed) == 1
+        assert "checksum mismatch" in failed[0]
+
+    def test_verify_backup_checksums_size_mismatch(self, tmp_path):
+        """Test verify_backup_checksums reports size mismatch."""
+        import hashlib
+        import json
+
+        from yubikey_init.backup import verify_backup_checksums
+
+        content = b"actual content"
+        sha256 = hashlib.sha256(content).hexdigest()
+        (tmp_path / "master-key.asc").write_bytes(content)
+
+        manifest_data = {
+            "version": "2.0.0",
+            "created_at": "2024-01-01T12:00:00+00:00",
+            "key_id": "ABCD1234",
+            "fingerprint": "FP",
+            "identity": "Test",
+            "files": [],
+            "backup_path": str(tmp_path),
+            "checksums": [
+                {
+                    "filename": "master-key.asc",
+                    "sha256": sha256,
+                    "size_bytes": 999,  # wrong size
+                }
+            ],
+            "gnupghome_included": False,
+        }
+        (tmp_path / "manifest.json").write_text(json.dumps(manifest_data))
+
+        result = verify_backup_checksums(tmp_path)
+        assert result.is_ok()
+        failed = result.unwrap()
+        assert len(failed) == 1
+        assert "size mismatch" in failed[0]
+
+
+class TestReadbackVerifyBackupExtended:
+    """Additional tests for readback_verify_backup function."""
+
+    def test_readback_verify_backup_checksum_failure(self, tmp_path):
+        """Test readback_verify_backup fails when checksums fail (line 740)."""
+        import json
+
+        from yubikey_init.backup import readback_verify_backup
+
+        backup_path = tmp_path / "backup"
+        backup_path.mkdir()
+        public_mount = tmp_path / "public"
+        public_mount.mkdir()
+
+        # Create file with wrong checksum in manifest
+        (backup_path / "master-key.asc").write_bytes(b"actual content")
+
+        manifest_data = {
+            "version": "2.0.0",
+            "created_at": "2024-01-01T12:00:00+00:00",
+            "key_id": "ABCD1234",
+            "fingerprint": "FP",
+            "identity": "Test",
+            "files": [],
+            "backup_path": str(backup_path),
+            "checksums": [
+                {
+                    "filename": "master-key.asc",
+                    "sha256": "wronghash",
+                    "size_bytes": 14,
+                }
+            ],
+            "gnupghome_included": False,
+        }
+        (backup_path / "manifest.json").write_text(json.dumps(manifest_data))
+
+        result = readback_verify_backup(backup_path, public_mount)
+        assert result.is_err()
+        assert "Verification failed" in str(result.unwrap_err())
+
+    def test_readback_verify_backup_unreadable_public_file(self, tmp_path):
+        """Test readback_verify_backup handles unreadable public file (lines 757-758)."""
+        import json
+
+        from yubikey_init.backup import readback_verify_backup
+
+        backup_path = tmp_path / "backup"
+        backup_path.mkdir()
+        public_mount = tmp_path / "public"
+        public_mount.mkdir()
+
+        # Create public-key.asc on both partitions
+        (backup_path / "public-key.asc").write_bytes(b"key content")
+        public_key_dest = public_mount / "public-key.asc"
+
+        # Create a directory where the file should be so read_bytes raises IsADirectoryError
+        public_key_dest.mkdir()
+
+        # Manifest with no checksums so checksum verification passes
+        manifest_data = {
+            "version": "2.0.0",
+            "created_at": "2024-01-01T12:00:00+00:00",
+            "key_id": "ABCD1234",
+            "fingerprint": "FP",
+            "identity": "Test",
+            "files": [],
+            "backup_path": str(backup_path),
+            "checksums": [],
+            "gnupghome_included": False,
+        }
+        (backup_path / "manifest.json").write_text(json.dumps(manifest_data))
+
+        result = readback_verify_backup(backup_path, public_mount)
+        assert result.is_err()
+        assert "Could not verify" in str(result.unwrap_err())
+
+
 class TestCreateFullBackup:
     """Test create_full_backup function."""
 
@@ -408,6 +667,116 @@ class TestCreateFullBackup:
             )
 
             assert result.is_err()
+
+    @patch("yubikey_init.backup.create_backup_directory")
+    def test_create_full_backup_revocation_cert_failure(self, mock_create_dir, tmp_path):
+        """Test backup fails when revocation cert generation fails (line 304)."""
+        from datetime import UTC, datetime
+
+        from yubikey_init.backup import create_full_backup
+        from yubikey_init.types import KeyInfo, KeyType, Result, SecureString
+
+        backup_dir = tmp_path / "backup"
+        backup_dir.mkdir()
+        mock_create_dir.return_value = Result.ok(backup_dir)
+
+        mock_key_info = KeyInfo(
+            key_id="ABCDEF1234567890",
+            fingerprint="1234567890ABCDEF1234567890ABCDEF12345678",
+            creation_date=datetime.now(UTC),
+            expiry_date=None,
+            identity="Test User <test@example.com>",
+            key_type=KeyType.ED25519,
+        )
+
+        with patch("yubikey_init.gpg_ops.GPGOperations") as mock_gpg_class:
+            mock_gpg = MagicMock()
+            mock_gpg.get_key_info.return_value = Result.ok(mock_key_info)
+            mock_gpg.get_key_fingerprint.return_value = Result.ok("1234567890ABCDEF")
+            mock_gpg.export_secret_keys.return_value = Result.ok(None)
+            mock_gpg.export_secret_subkeys.return_value = Result.ok(None)
+            mock_gpg.export_public_key.return_value = Result.ok(None)
+            mock_gpg.generate_revocation_certificate.return_value = Result.err(
+                Exception("Revocation cert failed")
+            )
+            mock_gpg_class.return_value = mock_gpg
+
+            # Create the files that GPG would create
+            (backup_dir / "master-key.asc").write_text("key data")
+            (backup_dir / "subkeys.asc").write_text("subkey data")
+            (backup_dir / "public-key.asc").write_text("pub key data")
+
+            result = create_full_backup(
+                tmp_path / ".gnupg",
+                tmp_path,
+                "ABCDEF1234567890",
+                SecureString("pass"),
+            )
+
+            assert result.is_err()
+            assert "revocation certificate" in str(result.unwrap_err()).lower()
+
+    @patch("shutil.which")
+    @patch("yubikey_init.backup.create_backup_directory")
+    def test_create_full_backup_with_paperkey_and_ssh(self, mock_create_dir, mock_which, tmp_path):
+        """Test create_full_backup with paperkey and SSH export (lines 313-325)."""
+        from datetime import UTC, datetime
+
+        from yubikey_init.backup import create_full_backup
+        from yubikey_init.types import KeyInfo, KeyType, Result, SecureString
+
+        backup_dir = tmp_path / "backup"
+        backup_dir.mkdir()
+        mock_create_dir.return_value = Result.ok(backup_dir)
+        mock_which.return_value = "/usr/bin/paperkey"
+
+        mock_key_info = KeyInfo(
+            key_id="ABCDEF1234567890",
+            fingerprint="1234567890ABCDEF1234567890ABCDEF12345678",
+            creation_date=datetime.now(UTC),
+            expiry_date=None,
+            identity="Test User <test@example.com>",
+            key_type=KeyType.ED25519,
+        )
+
+        with patch("yubikey_init.gpg_ops.GPGOperations") as mock_gpg_class:
+            with patch("yubikey_init.backup.generate_paperkey") as mock_paperkey:
+                mock_gpg = MagicMock()
+                mock_gpg.get_key_info.return_value = Result.ok(mock_key_info)
+                mock_gpg.get_key_fingerprint.return_value = Result.ok("1234567890ABCDEF")
+                mock_gpg.export_secret_keys.return_value = Result.ok(None)
+                mock_gpg.export_secret_subkeys.return_value = Result.ok(None)
+                mock_gpg.export_public_key.return_value = Result.ok(None)
+                mock_gpg.generate_revocation_certificate.return_value = Result.ok(None)
+                mock_gpg.export_ssh_key.return_value = Result.ok("ssh-ed25519 AAAA test@test")
+                mock_gpg_class.return_value = mock_gpg
+
+                # paperkey succeeds and creates the output file
+                def fake_paperkey(master_path, output_path):
+                    output_path.write_text("paperkey data")
+                    return Result.ok(None)
+
+                mock_paperkey.side_effect = fake_paperkey
+
+                # Create placeholder files that GPG would create
+                (backup_dir / "master-key.asc").write_text("key data")
+                (backup_dir / "subkeys.asc").write_text("subkey data")
+                (backup_dir / "public-key.asc").write_text("pub key data")
+                (backup_dir / "revocation-cert.asc").write_text("revoke cert")
+
+                result = create_full_backup(
+                    tmp_path / ".gnupg",
+                    tmp_path,
+                    "ABCDEF1234567890",
+                    SecureString("pass"),
+                    include_paperkey=True,
+                    include_ssh=True,
+                )
+
+                assert result.is_ok()
+                manifest = result.unwrap()
+                assert "master-key.paper" in manifest.files
+                assert "ssh-public-key.pub" in manifest.files
 
 
 class TestVerifyBackupIntegritySuccess:
