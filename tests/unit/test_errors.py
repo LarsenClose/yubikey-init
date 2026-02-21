@@ -5,6 +5,8 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
+import pytest
+
 from yubikey_init.errors import (
     EnvironmentError,
     ErrorCategory,
@@ -370,3 +372,127 @@ class TestWrapException:
 
         # Should pick up permission hints
         assert len(wrapped.recovery_hints) > 0
+
+
+class TestEnvironmentErrorPaperkey:
+    """Test EnvironmentError with paperkey missing tool."""
+
+    def test_missing_paperkey_tool(self) -> None:
+        """Test EnvironmentError with paperkey as missing tool."""
+        error = EnvironmentError("paperkey not found", missing_tool="paperkey")
+        assert error.category == ErrorCategory.ENVIRONMENT
+        assert any("paperkey" in str(h).lower() for h in error.recovery_hints)
+
+    def test_format_full_with_no_cause(self) -> None:
+        """Test format_full without cause."""
+        error = YubiKeyInitError(
+            message="No cause error",
+            category=ErrorCategory.INTERNAL,
+            recovery_hints=[RecoveryHint("Try restarting")],
+        )
+        formatted = error.format_full()
+        assert "No cause error" in formatted
+        assert "Try restarting" in formatted
+        assert "Caused by" not in formatted
+
+
+class TestErrorLoggerWithContent:
+    """Test ErrorLogger when log file has content."""
+
+    def test_log_error_with_cause_logs_cause(self) -> None:
+        """Test log_error includes cause info when error has cause."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "errors.log"
+            logger = ErrorLogger(log_path=log_path)
+
+            error = YubiKeyInitError(
+                message="Test error with cause",
+                category=ErrorCategory.GPG,
+                cause=RuntimeError("original cause"),
+            )
+            logger.log_error(error)
+
+            assert log_path.exists()
+            content = log_path.read_text()
+            assert "Test error with cause" in content
+
+    def test_get_recent_errors_with_content(self) -> None:
+        """Test get_recent_errors returns lines from populated log."""
+        import logging
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "errors.log"
+            logger = ErrorLogger(log_path=log_path)
+
+            # Log some errors
+            for i in range(3):
+                error = YubiKeyInitError(
+                    message=f"Error {i}",
+                    category=ErrorCategory.INTERNAL,
+                )
+                logger.log_error(error)
+
+            errors = logger.get_recent_errors(count=10)
+            assert len(errors) > 0
+
+
+class TestInterruptHandlerInterrupt:
+    """Test InterruptHandler._handle_interrupt method."""
+
+    def test_handle_interrupt_raises_user_cancelled(self) -> None:
+        """Test _handle_interrupt raises UserCancelledError."""
+        handler = InterruptHandler()
+
+        with pytest.raises(UserCancelledError, match="Interrupted by user"):
+            handler._handle_interrupt(2, None)
+
+    def test_handle_interrupt_sets_interrupted_flag(self) -> None:
+        """Test _handle_interrupt sets _interrupted to True."""
+        handler = InterruptHandler()
+
+        with pytest.raises(UserCancelledError):
+            handler._handle_interrupt(2, None)
+
+        assert handler.was_interrupted is True
+
+    def test_handle_interrupt_runs_cleanup_callbacks(self) -> None:
+        """Test _handle_interrupt runs registered cleanup callbacks."""
+        handler = InterruptHandler()
+        cleanup_ran = []
+
+        def cleanup() -> None:
+            cleanup_ran.append(True)
+
+        handler.register_cleanup(cleanup)
+
+        with pytest.raises(UserCancelledError):
+            handler._handle_interrupt(2, None)
+
+        assert len(cleanup_ran) == 1
+
+    def test_handle_interrupt_runs_callbacks_in_reverse(self) -> None:
+        """Test _handle_interrupt runs callbacks in reverse order."""
+        handler = InterruptHandler()
+        call_order = []
+
+        handler.register_cleanup(lambda: call_order.append(1))
+        handler.register_cleanup(lambda: call_order.append(2))
+        handler.register_cleanup(lambda: call_order.append(3))
+
+        with pytest.raises(UserCancelledError):
+            handler._handle_interrupt(2, None)
+
+        assert call_order == [3, 2, 1]
+
+    def test_handle_interrupt_suppresses_callback_exceptions(self) -> None:
+        """Test _handle_interrupt suppresses exceptions in callbacks."""
+        handler = InterruptHandler()
+
+        def bad_cleanup() -> None:
+            raise RuntimeError("Cleanup error")
+
+        handler.register_cleanup(bad_cleanup)
+
+        # Should still raise UserCancelledError, not RuntimeError
+        with pytest.raises(UserCancelledError):
+            handler._handle_interrupt(2, None)
