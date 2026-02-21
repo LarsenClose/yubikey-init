@@ -5,29 +5,38 @@
     "schedule:weekly",
     ":semanticCommits"
   ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "fileMatch": ["^\\.python-version$"],
+      "matchStrings": ["(?<currentValue>\\d+\\.\\d+(\\.\\d+)?)\\n"],
+      "datasourceTemplate": "python-version",
+      "depNameTemplate": "python"
+    }
+  ],
   "packageRules": [
     {
-      "matchManagers": ["pip_requirements", "pep621"],
+      "matchManagers": ["pep621"],
       "matchUpdateTypes": ["minor", "patch"],
       "automerge": true
     },
     {
-      "matchManagers": ["pip_requirements", "pep621"],
+      "matchManagers": ["pep621"],
       "matchUpdateTypes": ["major"],
       "automerge": false,
       "labels": ["breaking-change"]
     },
     {
-      "matchPackageNames": ["cryptography", "pyopenssl"],
+      "matchPackageNames": ["cryptography"],
       "automerge": false,
       "labels": ["security-sensitive"]
     },
     {
-      "matchPackageNames": ["yubikey-manager", "python-gnupg"],
-      "groupName": "yubikey-deps"
+      "matchPackageNames": ["pexpect", "rich", "textual"],
+      "groupName": "runtime-deps"
     },
     {
-      "matchPackageNames": ["pytest", "pytest-cov", "mypy", "ruff"],
+      "matchPackageNames": ["pytest", "pytest-cov", "pytest-asyncio", "mutmut", "mypy", "ruff"],
       "groupName": "dev-tools",
       "automerge": true
     }
