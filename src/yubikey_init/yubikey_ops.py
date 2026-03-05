@@ -40,7 +40,9 @@ class YubiKeyOperations:
                 input=input_text,
             )
         except FileNotFoundError:
-            return subprocess.CompletedProcess(cmd, returncode=1, stdout="", stderr="ykman not found")
+            return subprocess.CompletedProcess(
+                cmd, returncode=1, stdout="", stderr="ykman not found"
+            )
 
     def _run_gpg(
         self, args: list[str], input_text: str | None = None
