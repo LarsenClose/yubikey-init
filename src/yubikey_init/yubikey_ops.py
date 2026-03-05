@@ -32,12 +32,15 @@ class YubiKeyOperations:
         self, args: list[str], input_text: str | None = None
     ) -> subprocess.CompletedProcess[str]:
         cmd = [self._ykman_path] + args
-        return subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            input=input_text,
-        )
+        try:
+            return subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                input=input_text,
+            )
+        except FileNotFoundError:
+            return subprocess.CompletedProcess(cmd, returncode=1, stdout="", stderr="ykman not found")
 
     def _run_gpg(
         self, args: list[str], input_text: str | None = None
