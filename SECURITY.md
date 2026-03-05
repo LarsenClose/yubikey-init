@@ -4,6 +4,7 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
+| 0.2.x   | :white_check_mark: |
 | 0.1.x   | :white_check_mark: |
 
 ## Security Model
@@ -20,7 +21,7 @@ yubikey-init is designed with security as a core principle:
 ### Secure By Design
 
 - **No Shell Injection**: Uses subprocess with argument lists, not shell strings
-- **Minimal Dependencies**: Only `pexpect` and `rich` as runtime dependencies
+- **Minimal Dependencies**: Only `pexpect`, `rich`, and `textual` as runtime dependencies
 - **Type Safety**: Strict mypy checking catches potential issues
 - **Explicit Confirmation**: Destructive operations require explicit user consent
 - **SecureString Wrapper**: Masks sensitive data in logs and error messages

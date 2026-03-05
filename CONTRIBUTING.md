@@ -15,7 +15,7 @@ Thank you for your interest in contributing to yubikey-init.
 
 ```bash
 # Clone the repository
-git clone https://github.com/lclose/yubikey-init
+git clone https://github.com/LarsenClose/yubikey-init
 cd yubikey-init
 
 # Install dependencies
@@ -32,7 +32,7 @@ This project maintains high code quality standards:
 - **Type Safety**: All code must pass `mypy --strict`
 - **Linting**: All code must pass `ruff check`
 - **Formatting**: Code is formatted with `ruff format`
-- **Coverage**: Minimum 90% test coverage required
+- **Coverage**: Minimum 87% test coverage required
 
 ### Running Quality Checks
 
@@ -47,7 +47,7 @@ uv run ruff check src/ tests/
 uv run ruff format src/ tests/
 
 # All tests with coverage
-uv run pytest tests/ --cov=yubikey_init --cov-report=term-missing
+uv run pytest tests/ --cov=src/yubikey_init --cov-report=term-missing
 ```
 
 ## Testing
