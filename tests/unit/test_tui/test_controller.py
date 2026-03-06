@@ -14,7 +14,14 @@ from yubikey_init.tui.controller import (
     TUIController,
     TUIState,
 )
-from yubikey_init.types import CardStatus, KeyInfo, KeyType, Result, YubiKeyInfo
+from yubikey_init.types import (
+    CardStatus,
+    KeyInfo,
+    KeyType,
+    Result,
+    SecureString,
+    YubiKeyInfo,
+)
 
 
 class TestTUIState:
@@ -811,3 +818,170 @@ class TestTUIController:
         with patch("yubikey_init.inventory.Inventory.load", return_value=Result.ok(None)):
             ctrl = TUIController(yubikey_ops=mock_yk, gpg_ops=mock_gpg)
             assert ctrl.inventory is not None
+
+
+class TestTUIControllerWizardMethods:
+    """Tests for wizard execution methods on TUIController."""
+
+    @pytest.fixture
+    def controller(self) -> TUIController:
+        """Create a controller with mocked operations."""
+        yubikey_ops = MagicMock()
+        gpg_ops = MagicMock()
+        inventory = MagicMock(spec=Inventory)
+        return TUIController(yubikey_ops=yubikey_ops, gpg_ops=gpg_ops, inventory=inventory)
+
+    def test_generate_master_key_delegates(self, controller: TUIController) -> None:
+        """Test generate_master_key delegates to gpg_ops with converted expiry."""
+        expected = MagicMock()
+        controller.gpg_ops.generate_master_key.return_value = Result.ok(expected)
+        passphrase = SecureString("test-passphrase!!")
+        result = controller.generate_master_key(
+            identity="Test <test@test.com>",
+            passphrase=passphrase,
+            key_type=KeyType.ED25519,
+            expiry_years=2,
+        )
+        assert result.is_ok()
+        controller.gpg_ops.generate_master_key.assert_called_once_with(
+            identity="Test <test@test.com>",
+            passphrase=passphrase,
+            key_type=KeyType.ED25519,
+            expiry_days=730,
+        )
+
+    def test_generate_master_key_zero_expiry(self, controller: TUIController) -> None:
+        """Test generate_master_key passes 0 expiry_days for 0 expiry_years."""
+        controller.gpg_ops.generate_master_key.return_value = Result.ok(MagicMock())
+        passphrase = SecureString("test-passphrase!!")
+        controller.generate_master_key(
+            identity="Test <test@test.com>",
+            passphrase=passphrase,
+            expiry_years=0,
+        )
+        controller.gpg_ops.generate_master_key.assert_called_once()
+        call_kwargs = controller.gpg_ops.generate_master_key.call_args.kwargs
+        assert call_kwargs["expiry_days"] == 0
+
+    def test_generate_master_key_error(self, controller: TUIController) -> None:
+        """Test generate_master_key propagates errors from gpg_ops."""
+        controller.gpg_ops.generate_master_key.return_value = Result.err(Exception("GPG error"))
+        result = controller.generate_master_key(
+            identity="Test <test@test.com>",
+            passphrase=SecureString("test-passphrase!!"),
+        )
+        assert result.is_err()
+
+    def test_generate_all_subkeys_delegates(self, controller: TUIController) -> None:
+        """Test generate_all_subkeys delegates to gpg_ops with converted expiry."""
+        expected = [MagicMock(), MagicMock(), MagicMock()]
+        controller.gpg_ops.generate_all_subkeys.return_value = Result.ok(expected)
+        passphrase = SecureString("test-passphrase!!")
+        result = controller.generate_all_subkeys(
+            master_key_id="ABC123",
+            passphrase=passphrase,
+            key_type=KeyType.ED25519,
+            expiry_years=3,
+        )
+        assert result.is_ok()
+        assert len(result.unwrap()) == 3
+        controller.gpg_ops.generate_all_subkeys.assert_called_once_with(
+            master_key_id="ABC123",
+            passphrase=passphrase,
+            key_type=KeyType.ED25519,
+            expiry_days=1095,
+        )
+
+    def test_create_backup_delegates(self, controller: TUIController) -> None:
+        """Test create_backup delegates to create_full_backup."""
+        expected = MagicMock()
+        with patch(
+            "yubikey_init.tui.controller.create_full_backup",
+            return_value=Result.ok(expected),
+        ) as mock_backup:
+            controller.gpg_ops.gnupghome = "/tmp/gnupg"
+            result = controller.create_backup(
+                key_id="ABC123",
+                passphrase=SecureString("test-passphrase!!"),
+                backup_path="/tmp/backup",
+            )
+            assert result.is_ok()
+            mock_backup.assert_called_once()
+
+    def test_create_backup_error(self, controller: TUIController) -> None:
+        """Test create_backup propagates errors from create_full_backup."""
+        with patch(
+            "yubikey_init.tui.controller.create_full_backup",
+            return_value=Result.err(Exception("Backup failed")),
+        ):
+            controller.gpg_ops.gnupghome = "/tmp/gnupg"
+            result = controller.create_backup(
+                key_id="ABC123",
+                passphrase=SecureString("test-passphrase!!"),
+                backup_path="/tmp/backup",
+            )
+            assert result.is_err()
+
+    def test_provision_yubikey_success(self, controller: TUIController) -> None:
+        """Test provision_yubikey succeeds through all steps."""
+        controller.yubikey_ops.reset_openpgp.return_value = Result.ok(None)
+        controller.yubikey_ops.set_pins.return_value = Result.ok(None)
+        controller.yubikey_ops.transfer_all_keys.return_value = Result.ok(None)
+        mock_entry = MagicMock()
+        controller._inventory.get_or_create.return_value = mock_entry
+
+        result = controller.provision_yubikey(
+            serial="12345678",
+            key_id="ABC123",
+            passphrase=SecureString("test-passphrase!!"),
+            admin_pin=SecureString("12345678"),
+            user_pin=SecureString("123456"),
+        )
+        assert result.is_ok()
+        controller.yubikey_ops.reset_openpgp.assert_called_once_with("12345678")
+        controller.yubikey_ops.set_pins.assert_called_once()
+        controller.yubikey_ops.transfer_all_keys.assert_called_once()
+        controller._inventory.save.assert_called()
+
+    def test_provision_yubikey_reset_fails(self, controller: TUIController) -> None:
+        """Test provision_yubikey stops early when reset fails."""
+        controller.yubikey_ops.reset_openpgp.return_value = Result.err(Exception("Reset failed"))
+        result = controller.provision_yubikey(
+            serial="12345678",
+            key_id="ABC123",
+            passphrase=SecureString("test-passphrase!!"),
+            admin_pin=SecureString("12345678"),
+            user_pin=SecureString("123456"),
+        )
+        assert result.is_err()
+        controller.yubikey_ops.set_pins.assert_not_called()
+
+    def test_provision_yubikey_set_pins_fails(self, controller: TUIController) -> None:
+        """Test provision_yubikey stops early when set_pins fails."""
+        controller.yubikey_ops.reset_openpgp.return_value = Result.ok(None)
+        controller.yubikey_ops.set_pins.return_value = Result.err(Exception("PIN error"))
+        result = controller.provision_yubikey(
+            serial="12345678",
+            key_id="ABC123",
+            passphrase=SecureString("test-passphrase!!"),
+            admin_pin=SecureString("12345678"),
+            user_pin=SecureString("123456"),
+        )
+        assert result.is_err()
+        controller.yubikey_ops.transfer_all_keys.assert_not_called()
+
+    def test_provision_yubikey_transfer_fails(self, controller: TUIController) -> None:
+        """Test provision_yubikey stops early when transfer fails."""
+        controller.yubikey_ops.reset_openpgp.return_value = Result.ok(None)
+        controller.yubikey_ops.set_pins.return_value = Result.ok(None)
+        controller.yubikey_ops.transfer_all_keys.return_value = Result.err(
+            Exception("Transfer failed")
+        )
+        result = controller.provision_yubikey(
+            serial="12345678",
+            key_id="ABC123",
+            passphrase=SecureString("test-passphrase!!"),
+            admin_pin=SecureString("12345678"),
+            user_pin=SecureString("123456"),
+        )
+        assert result.is_err()

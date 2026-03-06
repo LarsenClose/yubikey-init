@@ -8,11 +8,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING
 
+from ..backup import BackupManifest, create_full_backup
 from ..gpg_ops import GPGOperations
 from ..inventory import Inventory, OpenPGPState
-from ..types import Result
+from ..types import KeyInfo, KeyType, Result, SecureString, SubkeyInfo
 from ..yubikey_ops import YubiKeyOperations
 
 if TYPE_CHECKING:
@@ -526,3 +528,139 @@ class TUIController:
             results["diagnostics"] = (False, str(e))
 
         return results
+
+    # --- Wizard execution methods ---
+
+    def generate_master_key(
+        self,
+        identity: str,
+        passphrase: SecureString,
+        key_type: KeyType = KeyType.ED25519,
+        expiry_years: int = 2,
+    ) -> Result[KeyInfo]:
+        """Generate a master GPG key.
+
+        Args:
+            identity: Name and email (e.g., "Alice <alice@test.com>").
+            passphrase: Master key passphrase.
+            key_type: Key algorithm.
+            expiry_years: Years until expiry (0 = never).
+
+        Returns:
+            Result containing KeyInfo on success.
+        """
+        expiry_days = expiry_years * 365 if expiry_years > 0 else 0
+        return self.gpg_ops.generate_master_key(
+            identity=identity,
+            passphrase=passphrase,
+            key_type=key_type,
+            expiry_days=expiry_days,
+        )
+
+    def generate_all_subkeys(
+        self,
+        master_key_id: str,
+        passphrase: SecureString,
+        key_type: KeyType = KeyType.ED25519,
+        expiry_years: int = 2,
+    ) -> Result[list[SubkeyInfo]]:
+        """Generate sign, encrypt, and authenticate subkeys.
+
+        Args:
+            master_key_id: The master key ID.
+            passphrase: Master key passphrase.
+            key_type: Key algorithm.
+            expiry_years: Years until expiry.
+
+        Returns:
+            Result containing list of SubkeyInfo on success.
+        """
+        expiry_days = expiry_years * 365 if expiry_years > 0 else 0
+        return self.gpg_ops.generate_all_subkeys(
+            master_key_id=master_key_id,
+            passphrase=passphrase,
+            key_type=key_type,
+            expiry_days=expiry_days,
+        )
+
+    def create_backup(
+        self,
+        key_id: str,
+        passphrase: SecureString,
+        backup_path: str,
+    ) -> Result[BackupManifest]:
+        """Create a full backup of GPG keys.
+
+        Args:
+            key_id: Master key ID to backup.
+            passphrase: Master key passphrase.
+            backup_path: Directory for backup files.
+
+        Returns:
+            Result containing BackupManifest on success.
+        """
+        gnupghome = self.gpg_ops.gnupghome
+        return create_full_backup(
+            gnupghome=gnupghome,
+            backup_path=Path(backup_path),
+            key_id=key_id,
+            passphrase=passphrase,
+        )
+
+    def provision_yubikey(
+        self,
+        serial: str,
+        key_id: str,
+        passphrase: SecureString,
+        admin_pin: SecureString,
+        user_pin: SecureString,
+    ) -> Result[None]:
+        """Provision a YubiKey with GPG subkeys.
+
+        Performs: reset OpenPGP, set PINs, transfer all keys.
+
+        Args:
+            serial: YubiKey serial number.
+            key_id: Master key ID containing subkeys.
+            passphrase: Master key passphrase.
+            admin_pin: New admin PIN for YubiKey.
+            user_pin: New user PIN for YubiKey.
+
+        Returns:
+            Result indicating success or failure.
+        """
+        # Reset OpenPGP applet
+        result = self.yubikey_ops.reset_openpgp(serial)
+        if result.is_err():
+            return result
+
+        # Set PINs
+        result = self.yubikey_ops.set_pins(
+            serial=serial,
+            new_user_pin=user_pin,
+            new_admin_pin=admin_pin,
+        )
+        if result.is_err():
+            return result
+
+        # Transfer all subkeys
+        result = self.yubikey_ops.transfer_all_keys(
+            serial=serial,
+            key_id=key_id,
+            passphrase=passphrase,
+            admin_pin=admin_pin,
+        )
+        if result.is_err():
+            return result
+
+        # Record in inventory
+        entry = self._inventory.get_or_create(serial)
+        entry.provisioned_identity = key_id
+        entry.add_history(
+            operation="provision",
+            success=True,
+            details=f"Provisioned with key {key_id}",
+        )
+        self._inventory.save()
+
+        return Result.ok(None)
