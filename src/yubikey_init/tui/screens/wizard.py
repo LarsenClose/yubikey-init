@@ -197,6 +197,8 @@ class WizardScreen(Screen[None]):
             self._execute_key_generation()
         elif button_id == "btn-backup":
             self._execute_backup()
+        elif button_id == "btn-transfer":
+            self._execute_transfer()
 
     def _run_step(self) -> None:
         """Dispatch to the handler for the current step."""
@@ -612,7 +614,25 @@ class WizardScreen(Screen[None]):
         )
         await content.mount(Static("", id="transfer-status", classes="check-item"))
 
-        self._update_transfer_status()
+        if self._controller is None or self._state.key_id is None or self._state.passphrase is None:
+            msg = (
+                "[yellow]No controller available. Transfer cannot be "
+                "performed in preview mode.[/yellow]"
+                if self._controller is None
+                else "[yellow]Keys not yet generated. Generate keys first.[/yellow]"
+            )
+            await content.mount(Static(msg, classes="check-item"))
+            self._step_complete = True
+            self.query_one("#btn-next", Button).disabled = False
+        else:
+            await content.mount(
+                Button(
+                    "Transfer Keys",
+                    id="btn-transfer",
+                    variant="primary",
+                )
+            )
+            self._update_transfer_status()
 
     def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
         """Handle checkbox changes for storage step."""
@@ -806,6 +826,20 @@ class WizardScreen(Screen[None]):
         else:
             checks.append(("[yellow]!![/yellow]", "YubiKey PINs: Not set"))
 
+        # Execution result checks
+        if self._state.key_id:
+            checks.append(("[green]OK[/green]", f"Key generated: {self._state.key_id}"))
+        else:
+            checks.append(("[yellow]!![/yellow]", "Key generation: Not completed"))
+
+        if self._state.subkey_count > 0:
+            checks.append(("[green]OK[/green]", f"Subkeys: {self._state.subkey_count} created"))
+
+        if self._state.backup_complete:
+            checks.append(("[green]OK[/green]", "Backup: Created"))
+        else:
+            checks.append(("[yellow]!![/yellow]", "Backup: Not created"))
+
         for icon, label in checks:
             await content.mount(Static(f"  {icon} {label}", classes="check-item"))
 
@@ -856,15 +890,20 @@ class WizardScreen(Screen[None]):
             f"  PINs:      {pins}",
         ]
 
+        if self._state.key_id:
+            summary_lines.append(f"  Key ID:   {self._state.key_id}")
+        if self._state.subkey_count > 0:
+            summary_lines.append(f"  Subkeys:  {self._state.subkey_count} created")
+        if self._state.backup_complete:
+            summary_lines.append("  Backup:   Complete")
+
         for line in summary_lines:
             await content.mount(Static(line, classes="check-item"))
 
         await content.mount(Static("", classes="check-item"))
         await content.mount(
             Static(
-                "[dim]The wizard execution engine will perform these "
-                "operations when connected. You may close the wizard "
-                "now.[/dim]",
+                "[dim]Setup complete. Press Escape or Cancel to close the wizard.[/dim]",
                 classes="check-item",
             )
         )
@@ -999,6 +1038,61 @@ class WizardScreen(Screen[None]):
         self._state.backup_complete = True
 
         status.update(f"[green]Backup complete: {file_count} files created[/green]")
+
+        self._step_complete = True
+        self.query_one("#btn-next", Button).disabled = False
+
+    @work(exclusive=True)
+    async def _execute_transfer(self) -> None:
+        """Execute YubiKey transfer via controller."""
+        if self._controller is None or self._state.key_id is None or self._state.passphrase is None:
+            return
+
+        status = self.query_one("#transfer-status", Static)
+
+        try:
+            transfer_btn = self.query_one("#btn-transfer", Button)
+            transfer_btn.disabled = True
+        except Exception:
+            pass
+
+        status.update("[dim]Detecting YubiKey...[/dim]")
+
+        devices = self._controller.get_devices()
+        if not devices:
+            status.update("[red]No YubiKey detected. Insert a YubiKey and try again.[/red]")
+            self._step_complete = False
+            self.query_one("#btn-next", Button).disabled = True
+            try:
+                transfer_btn = self.query_one("#btn-transfer", Button)
+                transfer_btn.disabled = False
+            except Exception:
+                pass
+            return
+
+        serial = devices[0].serial
+        status.update(f"[dim]Transferring keys to YubiKey {serial}...[/dim]")
+
+        result = self._controller.provision_yubikey(
+            serial=serial,
+            key_id=self._state.key_id,
+            passphrase=self._state.passphrase,
+            admin_pin=SecureString(self._state.admin_pin),
+            user_pin=SecureString(self._state.user_pin),
+        )
+
+        if result.is_err():
+            status.update(f"[red]Transfer failed: {result.unwrap_err()}[/red]")
+            self._step_complete = False
+            self.query_one("#btn-next", Button).disabled = True
+            try:
+                transfer_btn = self.query_one("#btn-transfer", Button)
+                transfer_btn.disabled = False
+            except Exception:
+                pass
+            return
+
+        status.update(f"[green]Keys transferred to YubiKey {serial}[/green]")
 
         self._step_complete = True
         self.query_one("#btn-next", Button).disabled = False

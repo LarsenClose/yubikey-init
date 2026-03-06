@@ -2354,3 +2354,410 @@ class TestWizardStepLabelsUpdated:
         for i in range(1, 11):
             assert i in _STEP_LABELS
             assert len(_STEP_LABELS[i]) > 0
+
+
+class TestWizardTransferExecution:
+    """Tests for wizard transfer execution."""
+
+    @pytest.mark.asyncio
+    @patch("yubikey_init.tui.screens.wizard.verify_environment")
+    async def test_transfer_step_shows_transfer_button_when_ready(
+        self,
+        mock_verify: MagicMock,
+        all_passed_report: EnvironmentReport,
+        mock_controller: MagicMock,
+    ) -> None:
+        from yubikey_init.tui.app import YubiKeyManagerApp
+
+        mock_verify.return_value = all_passed_report
+        app = YubiKeyManagerApp(controller=mock_controller)
+        async with app.run_test() as pilot:
+            screen = WizardScreen(controller=mock_controller)
+            screen._state.key_id = "ABC123"
+            screen._state.passphrase = SecureString("testpassphrase!!")
+            screen._state.admin_pin = "12345678"
+            screen._state.user_pin = "123456"
+            await pilot.app.push_screen(screen)
+            await pilot.pause()
+            await pilot.pause()
+
+            screen._step_complete = True
+            screen._current_step = 8
+            screen._run_step()
+            await pilot.pause()
+            await pilot.pause()
+            await pilot.pause()
+
+            transfer_btn = screen.query_one("#btn-transfer", Button)
+            assert transfer_btn is not None
+
+    @pytest.mark.asyncio
+    @patch("yubikey_init.tui.screens.wizard.verify_environment")
+    async def test_transfer_step_no_controller_preview_mode(
+        self,
+        mock_verify: MagicMock,
+        all_passed_report: EnvironmentReport,
+        mock_controller: MagicMock,
+    ) -> None:
+        from yubikey_init.tui.app import YubiKeyManagerApp
+
+        mock_verify.return_value = all_passed_report
+        app = YubiKeyManagerApp(controller=mock_controller)
+        async with app.run_test() as pilot:
+            screen = WizardScreen(controller=None)
+            await pilot.app.push_screen(screen)
+            await pilot.pause()
+            await pilot.pause()
+
+            screen._step_complete = True
+            screen._current_step = 8
+            screen._run_step()
+            await pilot.pause()
+            await pilot.pause()
+            await pilot.pause()
+
+            assert screen._step_complete is True
+            content = screen.query_one("#step-content", Vertical)
+            text = " ".join(str(child.render()) for child in content.children)
+            assert "preview mode" in text.lower()
+
+    @pytest.mark.asyncio
+    @patch("yubikey_init.tui.screens.wizard.verify_environment")
+    async def test_transfer_step_no_key_id(
+        self,
+        mock_verify: MagicMock,
+        all_passed_report: EnvironmentReport,
+        mock_controller: MagicMock,
+    ) -> None:
+        from yubikey_init.tui.app import YubiKeyManagerApp
+
+        mock_verify.return_value = all_passed_report
+        app = YubiKeyManagerApp(controller=mock_controller)
+        async with app.run_test() as pilot:
+            screen = WizardScreen(controller=mock_controller)
+            screen._state.passphrase = SecureString("testpassphrase!!")
+            # key_id is None
+            await pilot.app.push_screen(screen)
+            await pilot.pause()
+            await pilot.pause()
+
+            screen._step_complete = True
+            screen._current_step = 8
+            screen._run_step()
+            await pilot.pause()
+            await pilot.pause()
+            await pilot.pause()
+
+            assert screen._step_complete is True
+            content = screen.query_one("#step-content", Vertical)
+            text = " ".join(str(child.render()) for child in content.children)
+            assert "Generate keys first" in text
+
+    @pytest.mark.asyncio
+    @patch("yubikey_init.tui.screens.wizard.verify_environment")
+    async def test_execute_transfer_success(
+        self,
+        mock_verify: MagicMock,
+        all_passed_report: EnvironmentReport,
+        mock_controller: MagicMock,
+    ) -> None:
+        from yubikey_init.tui.app import YubiKeyManagerApp
+        from yubikey_init.tui.controller import DeviceDisplayInfo
+        from yubikey_init.types import Result
+
+        mock_verify.return_value = all_passed_report
+
+        device = MagicMock(spec=DeviceDisplayInfo)
+        device.serial = "12345678"
+        mock_controller.get_devices.return_value = [device]
+        mock_controller.provision_yubikey.return_value = Result.ok(None)
+
+        app = YubiKeyManagerApp(controller=mock_controller)
+        async with app.run_test() as pilot:
+            screen = WizardScreen(controller=mock_controller)
+            screen._state.key_id = "ABC123"
+            screen._state.passphrase = SecureString("testpassphrase!!")
+            screen._state.admin_pin = "12345678"
+            screen._state.user_pin = "123456"
+            await pilot.app.push_screen(screen)
+            await pilot.pause()
+            await pilot.pause()
+
+            screen._step_complete = True
+            screen._current_step = 8
+            screen._run_step()
+            await pilot.pause()
+            await pilot.pause()
+            await pilot.pause()
+
+            transfer_btn = screen.query_one("#btn-transfer", Button)
+            transfer_btn.press()
+            await pilot.pause()
+            await pilot.pause()
+            await pilot.pause()
+            await pilot.pause()
+            await pilot.pause()
+            await pilot.pause()
+
+            assert screen._step_complete is True
+            mock_controller.provision_yubikey.assert_called_once()
+
+    @pytest.mark.asyncio
+    @patch("yubikey_init.tui.screens.wizard.verify_environment")
+    async def test_execute_transfer_no_devices(
+        self,
+        mock_verify: MagicMock,
+        all_passed_report: EnvironmentReport,
+        mock_controller: MagicMock,
+    ) -> None:
+        from yubikey_init.tui.app import YubiKeyManagerApp
+
+        mock_verify.return_value = all_passed_report
+        mock_controller.get_devices.return_value = []
+
+        app = YubiKeyManagerApp(controller=mock_controller)
+        async with app.run_test() as pilot:
+            screen = WizardScreen(controller=mock_controller)
+            screen._state.key_id = "ABC123"
+            screen._state.passphrase = SecureString("testpassphrase!!")
+            screen._state.admin_pin = "12345678"
+            screen._state.user_pin = "123456"
+            await pilot.app.push_screen(screen)
+            await pilot.pause()
+            await pilot.pause()
+
+            screen._step_complete = True
+            screen._current_step = 8
+            screen._run_step()
+            await pilot.pause()
+            await pilot.pause()
+            await pilot.pause()
+
+            transfer_btn = screen.query_one("#btn-transfer", Button)
+            transfer_btn.press()
+            await pilot.pause()
+            await pilot.pause()
+            await pilot.pause()
+            await pilot.pause()
+            await pilot.pause()
+            await pilot.pause()
+
+            content = screen.query_one("#step-content", Vertical)
+            text = " ".join(str(child.render()) for child in content.children)
+            assert "No YubiKey detected" in text
+
+    @pytest.mark.asyncio
+    @patch("yubikey_init.tui.screens.wizard.verify_environment")
+    async def test_execute_transfer_provision_fails(
+        self,
+        mock_verify: MagicMock,
+        all_passed_report: EnvironmentReport,
+        mock_controller: MagicMock,
+    ) -> None:
+        from yubikey_init.tui.app import YubiKeyManagerApp
+        from yubikey_init.tui.controller import DeviceDisplayInfo
+        from yubikey_init.types import Result
+
+        mock_verify.return_value = all_passed_report
+
+        device = MagicMock(spec=DeviceDisplayInfo)
+        device.serial = "12345678"
+        mock_controller.get_devices.return_value = [device]
+        mock_controller.provision_yubikey.return_value = Result.err(RuntimeError("PIN rejected"))
+
+        app = YubiKeyManagerApp(controller=mock_controller)
+        async with app.run_test() as pilot:
+            screen = WizardScreen(controller=mock_controller)
+            screen._state.key_id = "ABC123"
+            screen._state.passphrase = SecureString("testpassphrase!!")
+            screen._state.admin_pin = "12345678"
+            screen._state.user_pin = "123456"
+            await pilot.app.push_screen(screen)
+            await pilot.pause()
+            await pilot.pause()
+
+            screen._step_complete = True
+            screen._current_step = 8
+            screen._run_step()
+            await pilot.pause()
+            await pilot.pause()
+            await pilot.pause()
+
+            transfer_btn = screen.query_one("#btn-transfer", Button)
+            transfer_btn.press()
+            await pilot.pause()
+            await pilot.pause()
+            await pilot.pause()
+            await pilot.pause()
+            await pilot.pause()
+            await pilot.pause()
+
+            assert screen._step_complete is False
+            content = screen.query_one("#step-content", Vertical)
+            text = " ".join(str(child.render()) for child in content.children)
+            assert "Transfer failed" in text
+
+
+class TestWizardVerificationExecutionResults:
+    """Tests for verification step showing execution results."""
+
+    @pytest.mark.asyncio
+    @patch("yubikey_init.tui.screens.wizard.verify_environment")
+    async def test_verification_shows_key_generation_result(
+        self,
+        mock_verify: MagicMock,
+        all_passed_report: EnvironmentReport,
+        mock_controller: MagicMock,
+    ) -> None:
+        from yubikey_init.tui.app import YubiKeyManagerApp
+
+        mock_verify.return_value = all_passed_report
+        app = YubiKeyManagerApp(controller=mock_controller)
+        async with app.run_test() as pilot:
+            screen = WizardScreen(controller=mock_controller)
+            screen._state.identity = "Test <test@test.com>"
+            screen._state.passphrase = SecureString("testpassphrase!!")
+            screen._state.key_id = "DEADBEEF1234"
+            await pilot.app.push_screen(screen)
+            await pilot.pause()
+            await pilot.pause()
+
+            screen._step_complete = True
+            screen._current_step = 9
+            screen._run_step()
+            await pilot.pause()
+            await pilot.pause()
+            await pilot.pause()
+
+            content = screen.query_one("#step-content", Vertical)
+            text = " ".join(str(child.render()) for child in content.children)
+            assert "Key generated: DEADBEEF1234" in text
+
+    @pytest.mark.asyncio
+    @patch("yubikey_init.tui.screens.wizard.verify_environment")
+    async def test_verification_shows_backup_result(
+        self,
+        mock_verify: MagicMock,
+        all_passed_report: EnvironmentReport,
+        mock_controller: MagicMock,
+    ) -> None:
+        from yubikey_init.tui.app import YubiKeyManagerApp
+
+        mock_verify.return_value = all_passed_report
+        app = YubiKeyManagerApp(controller=mock_controller)
+        async with app.run_test() as pilot:
+            screen = WizardScreen(controller=mock_controller)
+            screen._state.backup_complete = True
+            await pilot.app.push_screen(screen)
+            await pilot.pause()
+            await pilot.pause()
+
+            screen._step_complete = True
+            screen._current_step = 9
+            screen._run_step()
+            await pilot.pause()
+            await pilot.pause()
+            await pilot.pause()
+
+            content = screen.query_one("#step-content", Vertical)
+            text = " ".join(str(child.render()) for child in content.children)
+            assert "Backup: Created" in text
+
+    @pytest.mark.asyncio
+    @patch("yubikey_init.tui.screens.wizard.verify_environment")
+    async def test_verification_shows_missing_results(
+        self,
+        mock_verify: MagicMock,
+        all_passed_report: EnvironmentReport,
+        mock_controller: MagicMock,
+    ) -> None:
+        from yubikey_init.tui.app import YubiKeyManagerApp
+
+        mock_verify.return_value = all_passed_report
+        app = YubiKeyManagerApp(controller=mock_controller)
+        async with app.run_test() as pilot:
+            screen = WizardScreen(controller=mock_controller)
+            # Leave key_id as None and backup_complete as False
+            await pilot.app.push_screen(screen)
+            await pilot.pause()
+            await pilot.pause()
+
+            screen._step_complete = True
+            screen._current_step = 9
+            screen._run_step()
+            await pilot.pause()
+            await pilot.pause()
+            await pilot.pause()
+
+            content = screen.query_one("#step-content", Vertical)
+            text = " ".join(str(child.render()) for child in content.children)
+            assert "Not completed" in text
+            assert "Not created" in text
+
+
+class TestWizardSummaryUpdated:
+    """Tests for updated summary step text."""
+
+    @pytest.mark.asyncio
+    @patch("yubikey_init.tui.screens.wizard.verify_environment")
+    async def test_summary_shows_close_message(
+        self,
+        mock_verify: MagicMock,
+        all_passed_report: EnvironmentReport,
+        mock_controller: MagicMock,
+    ) -> None:
+        from yubikey_init.tui.app import YubiKeyManagerApp
+
+        mock_verify.return_value = all_passed_report
+        app = YubiKeyManagerApp(controller=mock_controller)
+        async with app.run_test() as pilot:
+            screen = WizardScreen(controller=mock_controller)
+            await pilot.app.push_screen(screen)
+            await pilot.pause()
+            await pilot.pause()
+
+            screen._step_complete = True
+            screen._current_step = 10
+            screen._run_step()
+            await pilot.pause()
+            await pilot.pause()
+            await pilot.pause()
+
+            content = screen.query_one("#step-content", Vertical)
+            text = " ".join(str(child.render()) for child in content.children)
+            assert "Setup complete" in text
+            assert "execution engine" not in text
+
+    @pytest.mark.asyncio
+    @patch("yubikey_init.tui.screens.wizard.verify_environment")
+    async def test_summary_shows_key_id_when_generated(
+        self,
+        mock_verify: MagicMock,
+        all_passed_report: EnvironmentReport,
+        mock_controller: MagicMock,
+    ) -> None:
+        from yubikey_init.tui.app import YubiKeyManagerApp
+
+        mock_verify.return_value = all_passed_report
+        app = YubiKeyManagerApp(controller=mock_controller)
+        async with app.run_test() as pilot:
+            screen = WizardScreen(controller=mock_controller)
+            screen._state.key_id = "DEADBEEF5678"
+            screen._state.subkey_count = 3
+            screen._state.backup_complete = True
+            await pilot.app.push_screen(screen)
+            await pilot.pause()
+            await pilot.pause()
+
+            screen._step_complete = True
+            screen._current_step = 10
+            screen._run_step()
+            await pilot.pause()
+            await pilot.pause()
+            await pilot.pause()
+
+            content = screen.query_one("#step-content", Vertical)
+            text = " ".join(str(child.render()) for child in content.children)
+            assert "DEADBEEF5678" in text
+            assert "3 created" in text
+            assert "Complete" in text
