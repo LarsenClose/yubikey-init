@@ -220,6 +220,16 @@ class TestRunGpg:
             args = mock_run.call_args[0][0]
             assert args == ["gpg", "--batch", "--yes", "--card-status"]
 
+    def test_run_gpg_handles_file_not_found(self) -> None:
+        """Test that _run_gpg handles missing gpg binary gracefully."""
+        ops = YubiKeyOperations()
+        with patch("yubikey_init.yubikey_ops.subprocess.run") as mock_run:
+            mock_run.side_effect = FileNotFoundError
+            result = ops._run_gpg(["--card-status"])
+            assert result.returncode == 1
+            assert result.stderr == "gpg not found"
+            assert result.stdout == ""
+
     def test_run_gpg_uses_gnupghome_env(self, tmp_path: Path) -> None:
         """Test that _run_gpg uses GNUPGHOME from env."""
         gnupghome = tmp_path / ".gnupg"
@@ -1101,6 +1111,29 @@ class TestTransferKeyAdditional:
 
             assert result.is_err()
             assert "PIN blocked" in str(result.unwrap_err())
+
+    def test_transfer_key_gpg_not_found(self) -> None:
+        """Test transfer_key handles missing gpg binary gracefully."""
+        from yubikey_init.types import KeySlot
+
+        ops = YubiKeyOperations()
+        with (
+            patch.object(ops, "_get_reader_for_serial", return_value=None),
+            patch("yubikey_init.yubikey_ops.subprocess.run") as mock_run,
+        ):
+            mock_run.side_effect = FileNotFoundError
+
+            result = ops.transfer_key(
+                "12345678",
+                "ABCDEF1234567890",
+                KeySlot.SIGNATURE,
+                SecureString("passphrase"),
+                SecureString("12345678"),
+            )
+
+            assert result.is_err()
+            error_msg = str(result.unwrap_err())
+            assert "gpg is not installed" in error_msg
 
 
 class TestWaitForDeviceAdditional:

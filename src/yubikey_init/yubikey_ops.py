@@ -48,13 +48,16 @@ class YubiKeyOperations:
         self, args: list[str], input_text: str | None = None
     ) -> subprocess.CompletedProcess[str]:
         cmd = ["gpg", "--batch", "--yes"] + args
-        return subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            env=self._env,
-            input=input_text,
-        )
+        try:
+            return subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                env=self._env,
+                input=input_text,
+            )
+        except FileNotFoundError:
+            return subprocess.CompletedProcess(cmd, returncode=1, stdout="", stderr="gpg not found")
 
     def list_devices(self) -> list[YubiKeyInfo]:
         result = self._run_ykman(["list", "--serials"])
@@ -189,6 +192,14 @@ class YubiKeyOperations:
                 text=True,
                 env=self._env,
                 timeout=120,
+            )
+        except FileNotFoundError:
+            return Result.err(
+                YubiKeyError(
+                    "gpg is not installed or not found on PATH. "
+                    "Install it with: brew install gnupg (macOS) "
+                    "or apt install gnupg2 (Linux)"
+                )
             )
         except subprocess.TimeoutExpired:
             return Result.err(YubiKeyError("Key transfer timed out after 120 seconds"))
