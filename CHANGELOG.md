@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-03-06
+
+### Added
+
+- `--version` flag to CLI (db554c6)
+- Edge case tests for ykman/gpg interaction paths (ecd2bc8)
+
+### Fixed
+
+- Handle missing `ykman` binary gracefully in `_run_ykman` (8a26ec2)
+- Handle missing `gpg` binary gracefully in `_run_gpg` and `transfer_key` (febb405)
+- Remove PyPI publish step from release workflow (1d7903b)
+- Inaccuracies in CONTRIBUTING.md and SECURITY.md (bb28b61)
+
+### Changed
+
+- CI: Add Dependabot auto-merge workflow (126ef75)
+- CI: Bump actions/upload-artifact from 6 to 7 (de3296f)
+
+## [0.2.0] - 2026-02-28
+
 ### Added
 
 - Interactive TUI for device and key management (`yubikey-init manage`)

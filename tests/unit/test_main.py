@@ -4265,5 +4265,5 @@ class TestVersionFlag:
         with pytest.raises(SystemExit):
             parser.parse_args(["--version"])
         captured = capsys.readouterr()  # type: ignore[union-attr]
-        assert "0.2.0" in captured.out
+        assert "0.2.1" in captured.out
         assert "yubikey-init" in captured.out

@@ -110,7 +110,7 @@ from .types import (
 )
 from .yubikey_ops import YubiKeyError, YubiKeyOperations, yubikey_available
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 __all__ = [
     # Types
