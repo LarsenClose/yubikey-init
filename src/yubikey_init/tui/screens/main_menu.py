@@ -36,6 +36,7 @@ class MainMenuScreen(Screen[None]):
         Binding("d", "goto_devices", "Devices", show=True),
         Binding("k", "goto_keys", "Keys", show=True),
         Binding("x", "goto_diagnostics", "Diagnostics", show=True),
+        Binding("w", "goto_wizard", "New Setup", show=True),
         Binding("q", "quit", "Quit", show=True),
     ]
 
@@ -141,6 +142,13 @@ class MainMenuScreen(Screen[None]):
                     id="menu-diagnostics",
                 ),
                 ListItem(
+                    Static(
+                        "[bold cyan][W][/bold cyan] New Setup      "
+                        "[dim italic]Guided initialization[/dim italic]"
+                    ),
+                    id="menu-wizard",
+                ),
+                ListItem(
                     Static("[bold red][Q][/bold red] Quit"),
                     id="menu-quit",
                 ),
@@ -231,6 +239,8 @@ class MainMenuScreen(Screen[None]):
             self.action_goto_keys()
         elif item_id == "menu-diagnostics":
             self.action_goto_diagnostics()
+        elif item_id == "menu-wizard":
+            self.action_goto_wizard()
         elif item_id == "menu-quit":
             self.action_quit()
 
@@ -251,6 +261,12 @@ class MainMenuScreen(Screen[None]):
         from .diagnostics import DiagnosticsScreen
 
         self.app.push_screen(DiagnosticsScreen(controller=self._controller))
+
+    def action_goto_wizard(self) -> None:
+        """Navigate to the setup wizard screen."""
+        from .wizard import WizardScreen
+
+        self.app.push_screen(WizardScreen(controller=self._controller))
 
     def action_quit(self) -> None:
         """Quit the application."""

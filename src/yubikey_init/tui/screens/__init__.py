@@ -11,6 +11,7 @@ from .diagnostics import DiagnosticsScreen
 from .key_detail import KeyDetailScreen
 from .key_list import KeyListScreen
 from .main_menu import MainMenuScreen
+from .wizard import WizardScreen
 
 __all__ = [
     "DeviceDetailScreen",
@@ -19,4 +20,5 @@ __all__ = [
     "KeyDetailScreen",
     "KeyListScreen",
     "MainMenuScreen",
+    "WizardScreen",
 ]

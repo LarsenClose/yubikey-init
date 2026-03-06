@@ -20,6 +20,7 @@ from .screens import (
     KeyDetailScreen,
     KeyListScreen,
     MainMenuScreen,
+    WizardScreen,
 )
 
 if TYPE_CHECKING:
@@ -47,6 +48,7 @@ class YubiKeyManagerApp(App[None]):
         Binding("k", "keys", "Keys", show=True),
         Binding("x", "diagnostics", "Diagnostics", show=True),
         Binding("escape", "back", "Back", show=True),
+        Binding("w", "wizard", "New Setup", show=False),
         Binding("m", "main_menu", "Main Menu", show=False),
     ]
 
@@ -156,6 +158,14 @@ class YubiKeyManagerApp(App[None]):
             self.pop_screen()
 
         self.push_screen(DiagnosticsScreen())
+
+    def action_wizard(self) -> None:
+        """Navigate to the setup wizard."""
+        if isinstance(self.screen, WizardScreen):
+            return
+        while len(self.screen_stack) > 1:
+            self.pop_screen()
+        self.push_screen(WizardScreen())
 
     def action_back(self) -> None:  # type: ignore[override]
         """Navigate back to the previous screen.
