@@ -1399,6 +1399,103 @@ class TestListSecretKeysEdgeCases:
 
             assert result.is_err()
 
+    def test_list_secret_keys_parses_expiry_date(self) -> None:
+        """Test that expiry date is correctly parsed from GPG colon output."""
+        gpg = GPGOperations()
+        # field[6] = 1769472000 (expiry timestamp)
+        output = (
+            "sec:u:256:22:ABCDEF1234567890:1706400000:1769472000:::::::::::\n"
+            "uid:u::::::::Test User <test@example.com>:"
+        )
+
+        with patch.object(gpg, "_run_gpg") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=output, stderr="")
+
+            result = gpg.list_secret_keys()
+
+            assert result.is_ok()
+            keys = result.unwrap()
+            assert len(keys) == 1
+            assert keys[0].expiry_date is not None
+            assert keys[0].expiry_date == datetime.fromtimestamp(1769472000, tz=UTC)
+            assert keys[0].creation_date == datetime.fromtimestamp(1706400000, tz=UTC)
+            assert keys[0].key_type == KeyType.ED25519
+
+    def test_list_secret_keys_no_expiry_when_field_empty(self) -> None:
+        """Test that expiry date is None when field[6] is empty (never-expiring key)."""
+        gpg = GPGOperations()
+        # field[6] is empty (no expiry)
+        output = (
+            "sec:u:256:22:ABCDEF1234567890:1706400000::::::::::::\n"
+            "uid:u::::::::No Expiry User <noexpiry@example.com>:"
+        )
+
+        with patch.object(gpg, "_run_gpg") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=output, stderr="")
+
+            result = gpg.list_secret_keys()
+
+            assert result.is_ok()
+            keys = result.unwrap()
+            assert len(keys) == 1
+            assert keys[0].expiry_date is None
+            assert keys[0].identity == "No Expiry User <noexpiry@example.com>"
+
+    def test_list_secret_keys_multiple_keys_mixed_expiry(self) -> None:
+        """Test multiple keys with mixed expiry states are handled correctly."""
+        gpg = GPGOperations()
+        output = (
+            "sec:u:256:22:KEY1AAAAAAAAAAAA:1706400000:1769472000:::::::::::\n"
+            "uid:u::::::::User One <one@example.com>:\n"
+            "sec:u:4096:1:KEY2BBBBBBBBBBBB:1640000000::::::::::::\n"
+            "uid:u::::::::User Two <two@example.com>:\n"
+            "sec:u:256:22:KEY3CCCCCCCCCCCC:1700000000:1800000000:::::::::::\n"
+            "uid:u::::::::User Three <three@example.com>:"
+        )
+
+        with patch.object(gpg, "_run_gpg") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=output, stderr="")
+
+            result = gpg.list_secret_keys()
+
+            assert result.is_ok()
+            keys = result.unwrap()
+            assert len(keys) == 3
+
+            # Key 1: ed25519, has expiry
+            assert keys[0].key_id == "KEY1AAAAAAAAAAAA"
+            assert keys[0].expiry_date == datetime.fromtimestamp(1769472000, tz=UTC)
+            assert keys[0].key_type == KeyType.ED25519
+
+            # Key 2: RSA (field[3]=1), no expiry
+            assert keys[1].key_id == "KEY2BBBBBBBBBBBB"
+            assert keys[1].expiry_date is None
+            assert keys[1].key_type == KeyType.RSA4096
+
+            # Key 3: ed25519, has expiry
+            assert keys[2].key_id == "KEY3CCCCCCCCCCCC"
+            assert keys[2].expiry_date == datetime.fromtimestamp(1800000000, tz=UTC)
+            assert keys[2].key_type == KeyType.ED25519
+
+    def test_list_secret_keys_rsa_key_type(self) -> None:
+        """Test that RSA keys are correctly identified from field[3]=1."""
+        gpg = GPGOperations()
+        output = (
+            "sec:u:4096:1:RSAABCDEF1234567:1640000000:1769472000:::::::::::\n"
+            "uid:u::::::::RSA User <rsa@example.com>:"
+        )
+
+        with patch.object(gpg, "_run_gpg") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=output, stderr="")
+
+            result = gpg.list_secret_keys()
+
+            assert result.is_ok()
+            keys = result.unwrap()
+            assert len(keys) == 1
+            assert keys[0].key_type == KeyType.RSA4096
+            assert keys[0].expiry_date is not None
+
 
 class TestExportPublicKeyEdgeCases:
     """Test export_public_key edge cases."""

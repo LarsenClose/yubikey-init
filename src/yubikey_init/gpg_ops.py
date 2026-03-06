@@ -424,21 +424,35 @@ Passphrase: {passphrase.get()}
 
         keys = []
         current_keyid = None
+        current_creation: datetime = datetime.now(UTC)
+        current_expiry: datetime | None = None
+        current_key_type: KeyType = KeyType.ED25519
 
         for line in result.stdout.split("\n"):
             if line.startswith("sec:"):
                 fields = line.split(":")
                 current_keyid = fields[4]
+                # Parse creation date from field[5]
+                if fields[5]:
+                    current_creation = datetime.fromtimestamp(int(fields[5]), tz=UTC)
+                else:
+                    current_creation = datetime.now(UTC)
+                # Parse expiry date from field[6]
+                current_expiry = (
+                    datetime.fromtimestamp(int(fields[6]), tz=UTC) if fields[6] else None
+                )
+                # Parse key type from field[3] (pubkey algorithm: 1=RSA, 22=EdDSA)
+                current_key_type = KeyType.ED25519 if fields[3] == "22" else KeyType.RSA4096
             elif line.startswith("uid:") and current_keyid:
                 fields = line.split(":")
                 keys.append(
                     KeyInfo(
                         key_id=current_keyid,
                         fingerprint=current_keyid,
-                        creation_date=datetime.now(UTC),
-                        expiry_date=None,
+                        creation_date=current_creation,
+                        expiry_date=current_expiry,
                         identity=fields[9],
-                        key_type=KeyType.ED25519,
+                        key_type=current_key_type,
                     )
                 )
                 current_keyid = None

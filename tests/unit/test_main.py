@@ -2088,7 +2088,7 @@ class TestCmdKeysEdgeCases:
 
     def test_cmd_keys_list_with_expiry(self) -> None:
         """Test keys list displays expiry date."""
-        from datetime import datetime
+        from datetime import UTC, datetime, timedelta
 
         args = argparse.Namespace(gnupghome=None, keys_command="list")
         prompts = MagicMock()
@@ -2096,7 +2096,8 @@ class TestCmdKeysEdgeCases:
         mock_key = MagicMock()
         mock_key.key_id = "ABC123"
         mock_key.identity = "Test User <test@example.com>"
-        mock_key.expiry_date = datetime(2025, 12, 31)
+        mock_key.expiry_date = datetime.now(UTC) + timedelta(days=200)
+        mock_key.key_type = KeyType.ED25519
 
         with (
             patch("yubikey_init.main.GPGOperations") as mock_gpg_class,
@@ -2108,6 +2109,162 @@ class TestCmdKeysEdgeCases:
 
             result = cmd_keys(args, prompts)
             assert result == 0
+
+
+class TestCmdKeysEnhancedOutput:
+    """Test enhanced keys list CLI output with days-until-expiry and key type."""
+
+    def test_cmd_keys_list_shows_days_until_expiry(self) -> None:
+        """Test keys list shows days until expiry for a future-expiring key."""
+        from datetime import UTC, datetime, timedelta
+
+        args = argparse.Namespace(gnupghome=None, keys_command="list")
+        prompts = MagicMock()
+
+        future_date = datetime.now(UTC) + timedelta(days=120)
+        mock_key = MagicMock()
+        mock_key.key_id = "ABC123"
+        mock_key.identity = "Test User <test@example.com>"
+        mock_key.expiry_date = future_date
+        mock_key.key_type = KeyType.ED25519
+
+        with (
+            patch("yubikey_init.main.GPGOperations") as mock_gpg_class,
+            patch("yubikey_init.main.console") as mock_console,
+        ):
+            mock_gpg = MagicMock()
+            mock_gpg.list_secret_keys.return_value = Result.ok([mock_key])
+            mock_gpg_class.return_value = mock_gpg
+
+            result = cmd_keys(args, prompts)
+            assert result == 0
+
+            # Should show key type and plain expiry (> 90 days)
+            calls = [str(c) for c in mock_console.print.call_args_list]
+            key_line = calls[1]  # Second print call is the key line
+            assert "[ed25519]" in key_line
+            expiry_line = calls[2]  # Third print call is the expiry line
+            assert "Expires:" in expiry_line
+            assert future_date.strftime("%Y-%m-%d") in expiry_line
+
+    def test_cmd_keys_list_expired_key(self) -> None:
+        """Test keys list shows EXPIRED warning for past-expiry key."""
+        from datetime import UTC, datetime, timedelta
+
+        args = argparse.Namespace(gnupghome=None, keys_command="list")
+        prompts = MagicMock()
+
+        past_date = datetime.now(UTC) - timedelta(days=45)
+        mock_key = MagicMock()
+        mock_key.key_id = "EXPIRED123"
+        mock_key.identity = "Expired User <expired@example.com>"
+        mock_key.expiry_date = past_date
+        mock_key.key_type = KeyType.RSA4096
+
+        with (
+            patch("yubikey_init.main.GPGOperations") as mock_gpg_class,
+            patch("yubikey_init.main.console") as mock_console,
+        ):
+            mock_gpg = MagicMock()
+            mock_gpg.list_secret_keys.return_value = Result.ok([mock_key])
+            mock_gpg_class.return_value = mock_gpg
+
+            result = cmd_keys(args, prompts)
+            assert result == 0
+
+            calls = [str(c) for c in mock_console.print.call_args_list]
+            key_line = calls[1]
+            assert "[rsa4096]" in key_line
+            expiry_line = calls[2]
+            assert "EXPIRED" in expiry_line
+            assert "bold red" in expiry_line
+
+    def test_cmd_keys_list_no_expiry(self) -> None:
+        """Test keys list shows 'Never' for key without expiry."""
+        args = argparse.Namespace(gnupghome=None, keys_command="list")
+        prompts = MagicMock()
+
+        mock_key = MagicMock()
+        mock_key.key_id = "NOEXPIRY123"
+        mock_key.identity = "No Expiry <noexpiry@example.com>"
+        mock_key.expiry_date = None
+        mock_key.key_type = KeyType.ED25519
+
+        with (
+            patch("yubikey_init.main.GPGOperations") as mock_gpg_class,
+            patch("yubikey_init.main.console") as mock_console,
+        ):
+            mock_gpg = MagicMock()
+            mock_gpg.list_secret_keys.return_value = Result.ok([mock_key])
+            mock_gpg_class.return_value = mock_gpg
+
+            result = cmd_keys(args, prompts)
+            assert result == 0
+
+            calls = [str(c) for c in mock_console.print.call_args_list]
+            expiry_line = calls[2]
+            assert "Never" in expiry_line
+
+    def test_cmd_keys_list_expiring_within_30_days(self) -> None:
+        """Test keys list shows yellow warning for key expiring within 30 days."""
+        from datetime import UTC, datetime, timedelta
+
+        args = argparse.Namespace(gnupghome=None, keys_command="list")
+        prompts = MagicMock()
+
+        soon_date = datetime.now(UTC) + timedelta(days=15)
+        mock_key = MagicMock()
+        mock_key.key_id = "SOON123"
+        mock_key.identity = "Soon User <soon@example.com>"
+        mock_key.expiry_date = soon_date
+        mock_key.key_type = KeyType.ED25519
+
+        with (
+            patch("yubikey_init.main.GPGOperations") as mock_gpg_class,
+            patch("yubikey_init.main.console") as mock_console,
+        ):
+            mock_gpg = MagicMock()
+            mock_gpg.list_secret_keys.return_value = Result.ok([mock_key])
+            mock_gpg_class.return_value = mock_gpg
+
+            result = cmd_keys(args, prompts)
+            assert result == 0
+
+            calls = [str(c) for c in mock_console.print.call_args_list]
+            expiry_line = calls[2]
+            assert "bold yellow" in expiry_line
+            assert "Expires in" in expiry_line
+
+    def test_cmd_keys_list_expiring_within_90_days(self) -> None:
+        """Test keys list shows yellow for key expiring within 90 days (but > 30)."""
+        from datetime import UTC, datetime, timedelta
+
+        args = argparse.Namespace(gnupghome=None, keys_command="list")
+        prompts = MagicMock()
+
+        mid_date = datetime.now(UTC) + timedelta(days=60)
+        mock_key = MagicMock()
+        mock_key.key_id = "MID123"
+        mock_key.identity = "Mid User <mid@example.com>"
+        mock_key.expiry_date = mid_date
+        mock_key.key_type = KeyType.ED25519
+
+        with (
+            patch("yubikey_init.main.GPGOperations") as mock_gpg_class,
+            patch("yubikey_init.main.console") as mock_console,
+        ):
+            mock_gpg = MagicMock()
+            mock_gpg.list_secret_keys.return_value = Result.ok([mock_key])
+            mock_gpg_class.return_value = mock_gpg
+
+            result = cmd_keys(args, prompts)
+            assert result == 0
+
+            calls = [str(c) for c in mock_console.print.call_args_list]
+            expiry_line = calls[2]
+            assert "yellow" in expiry_line
+            assert "days)" in expiry_line
+            assert mid_date.strftime("%Y-%m-%d") in expiry_line
 
 
 class TestCmdDashboard:

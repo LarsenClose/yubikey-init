@@ -1298,6 +1298,8 @@ def cmd_devices_reset(
 
 def cmd_keys(args: argparse.Namespace, prompts: Prompts) -> int:
     """Manage GPG keys."""
+    from datetime import UTC, datetime
+
     gnupghome = args.gnupghome or Path.home() / ".gnupg"
     gpg = GPGOperations(gnupghome)
 
@@ -1315,9 +1317,22 @@ def cmd_keys(args: argparse.Namespace, prompts: Prompts) -> int:
             return 0
 
         for key in keys:
-            console.print(f"  {key.key_id} - {key.identity}")
+            type_label = f"[{key.key_type.value}]"
+            console.print(f"  {key.key_id} - {key.identity} {type_label}")
             if key.expiry_date:
-                console.print(f"    Expires: {key.expiry_date.isoformat()}")
+                now = datetime.now(UTC)
+                days = (key.expiry_date - now).days
+                date_str = key.expiry_date.strftime("%Y-%m-%d")
+                if days < 0:
+                    console.print(f"    [bold red]EXPIRED ({-days} days ago)[/bold red]")
+                elif days <= 30:
+                    console.print(f"    [bold yellow]Expires in {days} days[/bold yellow]")
+                elif days <= 90:
+                    console.print(f"    [yellow]Expires: {date_str} ({days} days)[/yellow]")
+                else:
+                    console.print(f"    Expires: {date_str}")
+            else:
+                console.print("    Expires: Never")
         return 0
 
     elif args.keys_command == "renew":
