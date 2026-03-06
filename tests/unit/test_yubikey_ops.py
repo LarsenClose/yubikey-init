@@ -1159,3 +1159,622 @@ class TestWaitForDeviceAdditional:
             result = ops.wait_for_device(serial="99999999", timeout=1)
             assert result.is_err()
             assert "No YubiKey detected" in str(result.unwrap_err())
+
+
+class TestRunGpgFileNotFoundError:
+    """Tests for _run_gpg FileNotFoundError handling.
+
+    _run_gpg now catches FileNotFoundError and returns a synthetic
+    CompletedProcess (mirroring _run_ykman behavior). These tests verify
+    that behavior and its effect on callers.
+    """
+
+    def test_run_gpg_handles_file_not_found_gracefully(self) -> None:
+        """Test that _run_gpg catches FileNotFoundError like _run_ykman."""
+        ops = YubiKeyOperations()
+        with patch("yubikey_init.yubikey_ops.subprocess.run") as mock_run:
+            mock_run.side_effect = FileNotFoundError("gpg not found")
+            result = ops._run_gpg(["--card-status"])
+            assert result.returncode == 1
+            assert "gpg not found" in result.stderr
+
+    def test_run_ykman_handles_file_not_found_gracefully(self) -> None:
+        """Test that _run_ykman catches FileNotFoundError (for contrast)."""
+        ops = YubiKeyOperations()
+        with patch("yubikey_init.yubikey_ops.subprocess.run") as mock_run:
+            mock_run.side_effect = FileNotFoundError("ykman not found")
+            result = ops._run_ykman(["list"])
+            assert result.returncode == 1
+            assert "ykman not found" in result.stderr
+
+    def test_get_reader_for_serial_returns_none_when_gpg_missing(self) -> None:
+        """Test that _get_reader_for_serial returns None when gpg is missing.
+
+        Since _run_gpg now returns a synthetic CompletedProcess with returncode=1,
+        _get_reader_for_serial treats this as an error and returns None.
+        """
+        ops = YubiKeyOperations()
+        with patch("yubikey_init.yubikey_ops.subprocess.run") as mock_run:
+            mock_run.side_effect = FileNotFoundError("gpg not found")
+            reader = ops._get_reader_for_serial("12345678")
+            assert reader is None
+
+    def test_fetch_public_key_returns_error_when_gpg_missing(self) -> None:
+        """Test that fetch_public_key returns error when gpg is missing.
+
+        fetch_public_key calls _run_gpg(["--card-edit"]) first, which now returns
+        a synthetic CompletedProcess. The method then proceeds to get_card_status
+        (which uses _run_ykman, not _run_gpg). If card_status succeeds and has a
+        signature key, the second _run_gpg call for export will also fail gracefully.
+        """
+        from yubikey_init.types import CardStatus, Result
+
+        ops = YubiKeyOperations()
+        with (
+            patch.object(ops, "_run_gpg") as mock_gpg,
+            patch.object(ops, "get_card_status") as mock_status,
+        ):
+            # _run_gpg returns synthetic error for both calls
+            mock_gpg.return_value = MagicMock(returncode=1, stdout="", stderr="gpg not found")
+            mock_status.return_value = Result.ok(
+                CardStatus(
+                    serial="12345678",
+                    signature_key="1234567890ABCDEF1234567890ABCDEF12345678",
+                    encryption_key=None,
+                    authentication_key=None,
+                    signature_count=0,
+                    pin_retries=3,
+                    admin_pin_retries=3,
+                )
+            )
+            result = ops.fetch_public_key("12345678")
+            assert result.is_err()
+            assert "Could not fetch public key" in str(result.unwrap_err())
+
+
+class TestListDevicesOutputFormats:
+    """Tests for list_devices with various unexpected output formats."""
+
+    def test_list_devices_extra_whitespace(self) -> None:
+        """Test list_devices handles serials with extra whitespace."""
+        ops = YubiKeyOperations()
+        device_info_text = "Firmware version: 5.4.3\nOpenPGP     \tEnabled\n"
+        with patch.object(ops, "_run_ykman") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="  12345678  \n"),
+                MagicMock(returncode=0, stdout=device_info_text),
+            ]
+            devices = ops.list_devices()
+            assert len(devices) == 1
+            assert devices[0].serial == "12345678"
+
+    def test_list_devices_blank_lines_in_output(self) -> None:
+        """Test list_devices handles blank lines in serials output."""
+        ops = YubiKeyOperations()
+        device_info_text = "Firmware version: 5.4.3\nOpenPGP     \tEnabled\n"
+        with patch.object(ops, "_run_ykman") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="\n12345678\n\n87654321\n\n"),
+                MagicMock(returncode=0, stdout=device_info_text),
+                MagicMock(returncode=0, stdout=device_info_text),
+            ]
+            devices = ops.list_devices()
+            assert len(devices) == 2
+
+    def test_list_devices_non_numeric_serial(self) -> None:
+        """Test list_devices passes non-numeric serials through to _get_device_info.
+
+        The serial is treated as a string -- ykman list --serials may return
+        non-numeric values in edge cases. list_devices does not validate format.
+        """
+        ops = YubiKeyOperations()
+        device_info_text = "Firmware version: 5.4.3\n"
+        with patch.object(ops, "_run_ykman") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="ABCD1234\n"),
+                MagicMock(returncode=0, stdout=device_info_text),
+            ]
+            devices = ops.list_devices()
+            assert len(devices) == 1
+            assert devices[0].serial == "ABCD1234"
+
+    def test_list_devices_info_error_skips_device(self) -> None:
+        """Test list_devices skips devices when _get_device_info returns None."""
+        ops = YubiKeyOperations()
+        device_info_text = "Firmware version: 5.4.3\n"
+        with patch.object(ops, "_run_ykman") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="12345678\n87654321\n"),
+                MagicMock(returncode=1, stdout="", stderr="device error"),
+                MagicMock(returncode=0, stdout=device_info_text),
+            ]
+            devices = ops.list_devices()
+            assert len(devices) == 1
+            assert devices[0].serial == "87654321"
+
+
+class TestGetCardStatusEdgeCases:
+    """Tests for get_card_status with malformed/incomplete output."""
+
+    def test_get_card_status_missing_all_fields(self) -> None:
+        """Test get_card_status returns defaults when output has no recognizable fields."""
+        ops = YubiKeyOperations()
+        with patch.object(ops, "_run_ykman") as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=0, stdout="Some random output\nNo useful data here"
+            )
+            result = ops.get_card_status("12345678")
+            assert result.is_ok()
+            status = result.unwrap()
+            assert status.serial == "12345678"
+            assert status.signature_key is None
+            assert status.encryption_key is None
+            assert status.authentication_key is None
+            assert status.signature_count == 0
+            assert status.pin_retries == 3
+            assert status.admin_pin_retries == 3
+
+    def test_get_card_status_fingerprint_line_without_hex(self) -> None:
+        """Test get_card_status when fingerprint line exists but has no 40-char hex."""
+        ops = YubiKeyOperations()
+        card_output = (
+            "Signature key fingerprint: (not set)\n"
+            "Encryption key fingerprint: none\n"
+            "Authentication key fingerprint: \n"
+        )
+        with patch.object(ops, "_run_ykman") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=card_output)
+            result = ops.get_card_status("12345678")
+            assert result.is_ok()
+            status = result.unwrap()
+            assert status.signature_key is None
+            assert status.encryption_key is None
+            assert status.authentication_key is None
+
+    def test_get_card_status_partial_fingerprints(self) -> None:
+        """Test get_card_status with only some fingerprints set."""
+        ops = YubiKeyOperations()
+        card_output = (
+            "Signature key fingerprint: 1234567890ABCDEF1234567890ABCDEF12345678\n"
+            "Encryption key fingerprint: (not set)\n"
+            "Authentication key fingerprint: 567890ABCDEF1234567890ABCDEF1234567890AB\n"
+            "Signature counter: 0\n"
+            "PIN retries: 3/0/3\n"
+        )
+        with patch.object(ops, "_run_ykman") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=card_output)
+            result = ops.get_card_status("12345678")
+            assert result.is_ok()
+            status = result.unwrap()
+            assert status.signature_key == "1234567890ABCDEF1234567890ABCDEF12345678"
+            assert status.encryption_key is None
+            assert status.authentication_key == "567890ABCDEF1234567890ABCDEF1234567890AB"
+
+    def test_get_card_status_pin_retries_missing(self) -> None:
+        """Test get_card_status when PIN retries line is absent."""
+        ops = YubiKeyOperations()
+        card_output = "Signature counter: 10\n"
+        with patch.object(ops, "_run_ykman") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=card_output)
+            result = ops.get_card_status("12345678")
+            assert result.is_ok()
+            status = result.unwrap()
+            # Defaults to 3/3 when not parseable
+            assert status.pin_retries == 3
+            assert status.admin_pin_retries == 3
+            assert status.signature_count == 10
+
+    def test_get_card_status_pin_retries_malformed(self) -> None:
+        """Test get_card_status with malformed PIN retries format."""
+        ops = YubiKeyOperations()
+        card_output = "PIN retries: unknown\n"
+        with patch.object(ops, "_run_ykman") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=card_output)
+            result = ops.get_card_status("12345678")
+            assert result.is_ok()
+            status = result.unwrap()
+            # Regex r"(\d+)/(\d+)/(\d+)" won't match, so defaults remain
+            assert status.pin_retries == 3
+            assert status.admin_pin_retries == 3
+
+    def test_get_card_status_signature_counter_missing(self) -> None:
+        """Test get_card_status when signature counter line is absent."""
+        ops = YubiKeyOperations()
+        card_output = "PIN retries: 3/0/3\n"
+        with patch.object(ops, "_run_ykman") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=card_output)
+            result = ops.get_card_status("12345678")
+            assert result.is_ok()
+            status = result.unwrap()
+            assert status.signature_count == 0
+
+    def test_get_card_status_empty_output(self) -> None:
+        """Test get_card_status with completely empty output."""
+        ops = YubiKeyOperations()
+        with patch.object(ops, "_run_ykman") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="")
+            result = ops.get_card_status("12345678")
+            assert result.is_ok()
+            status = result.unwrap()
+            assert status.serial == "12345678"
+            assert status.signature_key is None
+            assert status.signature_count == 0
+            assert status.pin_retries == 3
+
+    def test_get_card_status_lowercase_fingerprint(self) -> None:
+        """Test get_card_status parses lowercase hex fingerprints (re.IGNORECASE)."""
+        ops = YubiKeyOperations()
+        card_output = "Signature key fingerprint: abcdef1234567890abcdef1234567890abcdef12\n"
+        with patch.object(ops, "_run_ykman") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=card_output)
+            result = ops.get_card_status("12345678")
+            assert result.is_ok()
+            status = result.unwrap()
+            assert status.signature_key == "abcdef1234567890abcdef1234567890abcdef12"
+
+
+class TestGetDeviceInfoEdgeCases:
+    """Tests for _get_device_info parsing with edge case outputs."""
+
+    def test_get_device_info_openpgp_not_enabled(self) -> None:
+        """Test _get_device_info when OpenPGP is listed but not enabled."""
+        ops = YubiKeyOperations()
+        device_info_text = (
+            "Firmware version: 5.4.3\nForm factor: Keychain (USB-A)\nOpenPGP     \tDisabled\n"
+        )
+        with patch.object(ops, "_run_ykman") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=device_info_text)
+            info = ops._get_device_info("12345678")
+            assert info is not None
+            assert info.has_openpgp is False
+
+    def test_get_device_info_openpgp_not_available(self) -> None:
+        """Test _get_device_info when OpenPGP is 'Not available'."""
+        ops = YubiKeyOperations()
+        device_info_text = (
+            "Firmware version: 5.4.3\nForm factor: Keychain (USB-A)\nOpenPGP     \tNot available\n"
+        )
+        with patch.object(ops, "_run_ykman") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=device_info_text)
+            info = ops._get_device_info("12345678")
+            assert info is not None
+            assert info.has_openpgp is False
+
+    def test_get_device_info_empty_output(self) -> None:
+        """Test _get_device_info with empty stdout."""
+        ops = YubiKeyOperations()
+        with patch.object(ops, "_run_ykman") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="")
+            info = ops._get_device_info("12345678")
+            assert info is not None
+            assert info.version == "unknown"
+            assert info.form_factor == "unknown"
+            assert info.has_openpgp is False
+
+    def test_get_device_info_firmware_version_with_extra_spaces(self) -> None:
+        """Test _get_device_info handles firmware version with extra whitespace."""
+        ops = YubiKeyOperations()
+        device_info_text = "Firmware version:   5.4.3  \n"
+        with patch.object(ops, "_run_ykman") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=device_info_text)
+            info = ops._get_device_info("12345678")
+            assert info is not None
+            assert info.version == "5.4.3"
+
+    def test_get_device_info_firmware_version_empty_after_colon(self) -> None:
+        """Test _get_device_info when firmware version line has empty value."""
+        ops = YubiKeyOperations()
+        device_info_text = "Firmware version:\n"
+        with patch.object(ops, "_run_ykman") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=device_info_text)
+            info = ops._get_device_info("12345678")
+            assert info is not None
+            # split(":", 1)[1].strip() will be empty string
+            assert info.version == ""
+
+    def test_get_device_info_openpgp_version_always_none(self) -> None:
+        """Test _get_device_info always sets openpgp_version to None.
+
+        The method never parses openpgp_version from the output; it is
+        always None.
+        """
+        ops = YubiKeyOperations()
+        device_info_text = "Firmware version: 5.4.3\nOpenPGP     \tEnabled\nOpenPGP version: 3.4\n"
+        with patch.object(ops, "_run_ykman") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=device_info_text)
+            info = ops._get_device_info("12345678")
+            assert info is not None
+            assert info.openpgp_version is None
+
+
+class TestSetPinsPartialFailure:
+    """Tests for set_pins partial failure scenarios.
+
+    When change_user_pin succeeds but change_admin_pin fails, the device
+    is left in a half-configured state (user PIN changed, admin PIN still
+    default). These tests document this behavior.
+    """
+
+    def test_set_pins_user_pin_changed_but_admin_fails(self) -> None:
+        """Test set_pins returns error but user PIN is already changed.
+
+        Documents that after this failure, the device has:
+        - User PIN: new value (changed from default)
+        - Admin PIN: still the old/default value
+        This is a half-configured state that the caller must handle.
+        """
+        ops = YubiKeyOperations()
+        with patch.object(ops, "_run_ykman") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0),  # change_user_pin succeeds
+                MagicMock(returncode=1, stderr="Admin PIN change failed"),
+            ]
+            result = ops.set_pins(
+                "12345678",
+                SecureString("new_user_pin"),
+                SecureString("new_admin_pin"),
+            )
+            assert result.is_err()
+            # User PIN was already changed (first call succeeded)
+            assert mock_run.call_count == 2
+            # First call was change_user_pin (from default "123456" to new)
+            first_call_args = mock_run.call_args_list[0][0][0]
+            assert "change-pin" in first_call_args
+            # Second call was change_admin_pin
+            second_call_args = mock_run.call_args_list[1][0][0]
+            assert "change-admin-pin" in second_call_args
+
+    def test_set_pins_with_custom_current_admin_pin(self) -> None:
+        """Test set_pins uses provided current_admin_pin instead of default."""
+        ops = YubiKeyOperations()
+        with patch.object(ops, "_run_ykman") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            result = ops.set_pins(
+                "12345678",
+                SecureString("new_user"),
+                SecureString("new_admin"),
+                current_admin_pin=SecureString("custom_admin"),
+            )
+            assert result.is_ok()
+            # Admin PIN change should use "custom_admin" not default "12345678"
+            admin_call_args = mock_run.call_args_list[1][0][0]
+            assert "custom_admin" in admin_call_args
+
+    def test_set_pins_default_admin_pin_used(self) -> None:
+        """Test set_pins uses default admin PIN '12345678' when not provided."""
+        ops = YubiKeyOperations()
+        with patch.object(ops, "_run_ykman") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            result = ops.set_pins(
+                "12345678",
+                SecureString("new_user"),
+                SecureString("new_admin"),
+            )
+            assert result.is_ok()
+            # Admin PIN change should use default "12345678"
+            admin_call_args = mock_run.call_args_list[1][0][0]
+            assert "12345678" in admin_call_args
+
+    def test_set_pins_default_user_pin_used(self) -> None:
+        """Test set_pins uses default user PIN '123456' as current PIN."""
+        ops = YubiKeyOperations()
+        with patch.object(ops, "_run_ykman") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            result = ops.set_pins(
+                "12345678",
+                SecureString("new_user"),
+                SecureString("new_admin"),
+            )
+            assert result.is_ok()
+            # User PIN change should use default "123456" as current
+            user_call_args = mock_run.call_args_list[0][0][0]
+            assert "123456" in user_call_args
+
+
+class TestFetchPublicKeyFallbackLogic:
+    """Tests for fetch_public_key fallback paths."""
+
+    def test_fetch_public_key_gpg_export_fails(self) -> None:
+        """Test fetch_public_key when card has key but gpg export fails."""
+        from yubikey_init.types import CardStatus, Result
+
+        ops = YubiKeyOperations()
+        with (
+            patch.object(ops, "_run_gpg") as mock_gpg,
+            patch.object(ops, "get_card_status") as mock_status,
+        ):
+            mock_status.return_value = Result.ok(
+                CardStatus(
+                    serial="12345678",
+                    signature_key="1234567890ABCDEF1234567890ABCDEF12345678",
+                    encryption_key=None,
+                    authentication_key=None,
+                    signature_count=0,
+                    pin_retries=3,
+                    admin_pin_retries=3,
+                )
+            )
+            # First call is --card-edit, second is --export (which fails)
+            mock_gpg.side_effect = [
+                MagicMock(returncode=0, stdout=""),  # card-edit
+                MagicMock(returncode=1, stdout="", stderr="export failed"),
+            ]
+            result = ops.fetch_public_key("12345678")
+            assert result.is_err()
+            assert "Could not fetch public key" in str(result.unwrap_err())
+
+    def test_fetch_public_key_uses_last_16_chars_of_fingerprint(self) -> None:
+        """Test fetch_public_key exports using last 16 chars of signature key."""
+        from yubikey_init.types import CardStatus, Result
+
+        ops = YubiKeyOperations()
+        fingerprint = "1234567890ABCDEF1234567890ABCDEF12345678"
+        with (
+            patch.object(ops, "_run_gpg") as mock_gpg,
+            patch.object(ops, "get_card_status") as mock_status,
+        ):
+            mock_status.return_value = Result.ok(
+                CardStatus(
+                    serial="12345678",
+                    signature_key=fingerprint,
+                    encryption_key=None,
+                    authentication_key=None,
+                    signature_count=0,
+                    pin_retries=3,
+                    admin_pin_retries=3,
+                )
+            )
+            mock_gpg.side_effect = [
+                MagicMock(returncode=0, stdout=""),  # card-edit
+                MagicMock(
+                    returncode=0,
+                    stdout="-----BEGIN PGP PUBLIC KEY BLOCK-----\n",
+                ),
+            ]
+            result = ops.fetch_public_key("12345678")
+            assert result.is_ok()
+            # Verify the export call used last 16 chars
+            export_call_args = mock_gpg.call_args_list[1][0][0]
+            assert fingerprint[-16:] in export_call_args
+
+    def test_fetch_public_key_card_edit_fails_still_tries_export(self) -> None:
+        """Test fetch_public_key continues even if card-edit fails.
+
+        The return value of _run_gpg(["--card-edit"]) at line 617 is
+        assigned to `result` but its returncode is never checked before
+        get_card_status is called.
+        """
+        from yubikey_init.types import CardStatus, Result
+
+        ops = YubiKeyOperations()
+        with (
+            patch.object(ops, "_run_gpg") as mock_gpg,
+            patch.object(ops, "get_card_status") as mock_status,
+        ):
+            mock_status.return_value = Result.ok(
+                CardStatus(
+                    serial="12345678",
+                    signature_key="1234567890ABCDEF1234567890ABCDEF12345678",
+                    encryption_key=None,
+                    authentication_key=None,
+                    signature_count=0,
+                    pin_retries=3,
+                    admin_pin_retries=3,
+                )
+            )
+            mock_gpg.side_effect = [
+                MagicMock(returncode=1, stderr="card-edit failed"),  # card-edit fails
+                MagicMock(
+                    returncode=0,
+                    stdout="-----BEGIN PGP PUBLIC KEY BLOCK-----\n",
+                ),
+            ]
+            # Despite card-edit failing, fetch_public_key still proceeds
+            result = ops.fetch_public_key("12345678")
+            assert result.is_ok()
+
+
+class TestCheckVersionEdgeCases:
+    """Tests for edge cases in check_ykman_version, check_gpg_version,
+    check_scdaemon."""
+
+    def test_check_ykman_version_empty_output(self) -> None:
+        """Test check_ykman_version with empty stdout.
+
+        When stdout is empty, stdout.strip().split()[-1] raises IndexError.
+        """
+        from yubikey_init.yubikey_ops import check_ykman_version
+
+        with patch("yubikey_init.yubikey_ops.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="")
+            with pytest.raises(IndexError):
+                check_ykman_version()
+
+    def test_check_ykman_version_whitespace_only(self) -> None:
+        """Test check_ykman_version with whitespace-only stdout.
+
+        strip() on whitespace-only gives empty string, split() gives [],
+        so [-1] raises IndexError.
+        """
+        from yubikey_init.yubikey_ops import check_ykman_version
+
+        with patch("yubikey_init.yubikey_ops.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="   \n  ")
+            with pytest.raises(IndexError):
+                check_ykman_version()
+
+    def test_check_gpg_version_empty_output(self) -> None:
+        """Test check_gpg_version with completely empty stdout."""
+        from yubikey_init.yubikey_ops import check_gpg_version
+
+        with patch("yubikey_init.yubikey_ops.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="")
+            # stdout.split("\\n") returns [""], which is truthy
+            # lines[0].split()[-1] on "" raises IndexError
+            with pytest.raises(IndexError):
+                check_gpg_version()
+
+    def test_check_gpg_version_single_word_first_line(self) -> None:
+        """Test check_gpg_version with single word on first line."""
+        from yubikey_init.yubikey_ops import check_gpg_version
+
+        with patch("yubikey_init.yubikey_ops.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="gpg 2.4.0")
+            result = check_gpg_version()
+            assert result.is_ok()
+            assert result.unwrap() == "2.4.0"
+
+    def test_check_scdaemon_returns_false_on_nonzero_exit(self) -> None:
+        """Test check_scdaemon wraps non-zero exit in Result.ok(False)."""
+        from yubikey_init.yubikey_ops import check_scdaemon
+
+        with patch("yubikey_init.yubikey_ops.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=2)
+            result = check_scdaemon()
+            assert result.is_ok()
+            assert result.unwrap() is False
+
+
+class TestGetReaderForSerialEdgeCases:
+    """Edge cases for _get_reader_for_serial."""
+
+    def test_get_reader_no_reader_line(self) -> None:
+        """Test _get_reader_for_serial when output has serial but no Reader
+        line."""
+        ops = YubiKeyOperations()
+        with patch.object(ops, "_run_gpg") as mock_gpg:
+            mock_gpg.return_value = MagicMock(
+                returncode=0,
+                stdout=("Application ID ...: 12345678\nName of cardholder: Test"),
+            )
+            reader = ops._get_reader_for_serial("12345678")
+            assert reader is None
+
+    def test_get_reader_reader_line_no_colon_match(self) -> None:
+        """Test _get_reader_for_serial when Reader line has no colon."""
+        ops = YubiKeyOperations()
+        with patch.object(ops, "_run_gpg") as mock_gpg:
+            mock_gpg.return_value = MagicMock(
+                returncode=0,
+                stdout="Reader\n12345678\n",
+            )
+            # "Reader" line has no colon, regex r":\s*(.+)$" won't match
+            reader = ops._get_reader_for_serial("12345678")
+            assert reader is None
+
+    def test_get_reader_serial_in_app_id_finds_reader(self) -> None:
+        """Test _get_reader_for_serial when serial appears in Application ID
+        context."""
+        ops = YubiKeyOperations()
+        with patch.object(ops, "_run_gpg") as mock_gpg:
+            mock_gpg.return_value = MagicMock(
+                returncode=0,
+                stdout=(
+                    "Application ID ...:"
+                    " D276000124010200000612345678\n"
+                    "Reader ...........: Yubico YubiKey OTP+FIDO+CCID\n"
+                ),
+            )
+            # Serial "12345678" appears in Application ID line
+            reader = ops._get_reader_for_serial("12345678")
+            assert reader == "Yubico YubiKey OTP+FIDO+CCID"
