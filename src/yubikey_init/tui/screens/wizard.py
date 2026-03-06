@@ -52,6 +52,10 @@ class WizardState:
     storage_path: str = ""
     admin_pin: str = ""
     user_pin: str = ""
+    # Execution results
+    key_id: str | None = None
+    subkey_count: int = 0
+    backup_complete: bool = False
 
 
 class WizardScreen(Screen[None]):
@@ -189,6 +193,10 @@ class WizardScreen(Screen[None]):
             self.action_next_step()
         elif button_id == "btn-cancel":
             self.action_cancel()
+        elif button_id == "btn-generate":
+            self._execute_key_generation()
+        elif button_id == "btn-backup":
+            self._execute_backup()
 
     def _run_step(self) -> None:
         """Dispatch to the handler for the current step."""
@@ -462,17 +470,51 @@ class WizardScreen(Screen[None]):
         await content.mount(Static(f"  Algorithm: {key_type}", classes="check-item"))
         await content.mount(Static(f"  Expiry: {expiry}", classes="check-item"))
         await content.mount(Static("", classes="check-item"))
-        await content.mount(
-            Static(
-                "[dim]Key generation will be performed when the wizard "
-                "execution engine is connected.[/dim]",
-                id="generation-status",
-                classes="check-item",
-            )
-        )
 
-        self._step_complete = True
-        self.query_one("#btn-next", Button).disabled = False
+        if self._state.key_id:
+            # Already generated (navigated back and forward)
+            await content.mount(
+                Static(
+                    f"[green]Keys already generated. Key ID: {self._state.key_id}[/green]",
+                    id="generation-status",
+                    classes="check-item",
+                )
+            )
+            if self._state.subkey_count > 0:
+                await content.mount(
+                    Static(
+                        f"  [green]{self._state.subkey_count} subkeys created[/green]",
+                        classes="check-item",
+                    )
+                )
+            self._step_complete = True
+            self.query_one("#btn-next", Button).disabled = False
+        elif self._controller is None:
+            await content.mount(
+                Static(
+                    "[yellow]No controller available. Keys cannot be "
+                    "generated in preview mode.[/yellow]",
+                    id="generation-status",
+                    classes="check-item",
+                )
+            )
+            self._step_complete = True
+            self.query_one("#btn-next", Button).disabled = False
+        else:
+            await content.mount(
+                Static(
+                    "",
+                    id="generation-status",
+                    classes="check-item",
+                )
+            )
+            await content.mount(
+                Button(
+                    "Generate Keys",
+                    id="btn-generate",
+                    variant="primary",
+                )
+            )
 
     @work(exclusive=True)
     async def _run_backup_step(self) -> None:
@@ -494,17 +536,45 @@ class WizardScreen(Screen[None]):
             await content.mount(Static(f"  Backup path: {path}", classes="check-item"))
 
         await content.mount(Static("", classes="check-item"))
-        await content.mount(
-            Static(
-                "[dim]Backup creation will be performed when the wizard "
-                "execution engine is connected.[/dim]",
-                id="backup-status",
-                classes="check-item",
-            )
-        )
 
-        self._step_complete = True
-        self.query_one("#btn-next", Button).disabled = False
+        if self._state.backup_complete:
+            await content.mount(
+                Static(
+                    "[green]Backup already created.[/green]",
+                    id="backup-status",
+                    classes="check-item",
+                )
+            )
+            self._step_complete = True
+            self.query_one("#btn-next", Button).disabled = False
+        elif self._controller is None or not self._state.key_id:
+            msg = (
+                "[yellow]No controller available.[/yellow]"
+                if self._controller is None
+                else "[yellow]Keys not yet generated. Generate keys first.[/yellow]"
+            )
+            await content.mount(Static(msg, id="backup-status", classes="check-item"))
+            self._step_complete = True
+            self.query_one("#btn-next", Button).disabled = False
+        elif not self._state.storage_path and not self._state.skip_storage:
+            await content.mount(
+                Static(
+                    "[yellow]No backup path configured. Skipping backup.[/yellow]",
+                    id="backup-status",
+                    classes="check-item",
+                )
+            )
+            self._step_complete = True
+            self.query_one("#btn-next", Button).disabled = False
+        else:
+            await content.mount(Static("", id="backup-status", classes="check-item"))
+            await content.mount(
+                Button(
+                    "Create Backup",
+                    id="btn-backup",
+                    variant="primary",
+                )
+            )
 
     @work(exclusive=True)
     async def _run_transfer_step(self) -> None:
@@ -820,6 +890,118 @@ class WizardScreen(Screen[None]):
         self._step_complete = True
         next_btn = self.query_one("#btn-next", Button)
         next_btn.disabled = False
+
+    @work(exclusive=True)
+    async def _execute_key_generation(self) -> None:
+        """Execute key generation via controller."""
+        if self._controller is None or self._state.passphrase is None:
+            return
+
+        status = self.query_one("#generation-status", Static)
+
+        # Disable generate button while running
+        try:
+            gen_btn = self.query_one("#btn-generate", Button)
+            gen_btn.disabled = True
+        except Exception:
+            pass
+
+        status.update("[dim]Generating master key...[/dim]")
+
+        result = self._controller.generate_master_key(
+            identity=self._state.identity or "",
+            passphrase=self._state.passphrase,
+            key_type=self._state.key_type,
+            expiry_years=self._state.expiry_years,
+        )
+
+        if result.is_err():
+            status.update(f"[red]Master key generation failed: {result.unwrap_err()}[/red]")
+            try:
+                gen_btn = self.query_one("#btn-generate", Button)
+                gen_btn.disabled = False
+            except Exception:
+                pass
+            return
+
+        key_info = result.unwrap()
+        self._state.key_id = key_info.key_id
+
+        status.update(
+            f"[green]Master key created: {key_info.key_id}[/green]\n"
+            "[dim]Generating subkeys...[/dim]"
+        )
+
+        sub_result = self._controller.generate_all_subkeys(
+            master_key_id=key_info.key_id,
+            passphrase=self._state.passphrase,
+            key_type=self._state.key_type,
+            expiry_years=self._state.expiry_years,
+        )
+
+        if sub_result.is_err():
+            status.update(
+                f"[green]Master key: {key_info.key_id}[/green]\n"
+                "[red]Subkey generation failed: "
+                f"{sub_result.unwrap_err()}[/red]"
+            )
+            # Still allow advancing since master key was created
+            self._step_complete = True
+            self.query_one("#btn-next", Button).disabled = False
+            return
+
+        subkeys = sub_result.unwrap()
+        self._state.subkey_count = len(subkeys)
+
+        status.update(
+            f"[green]Master key: {key_info.key_id}[/green]\n"
+            f"[green]{len(subkeys)} subkeys created "
+            f"(sign, encrypt, auth)[/green]"
+        )
+
+        self._step_complete = True
+        self.query_one("#btn-next", Button).disabled = False
+
+    @work(exclusive=True)
+    async def _execute_backup(self) -> None:
+        """Execute backup creation via controller."""
+        if self._controller is None or self._state.passphrase is None or not self._state.key_id:
+            return
+
+        status = self.query_one("#backup-status", Static)
+
+        try:
+            backup_btn = self.query_one("#btn-backup", Button)
+            backup_btn.disabled = True
+        except Exception:
+            pass
+
+        backup_path = self._state.storage_path or "~/.gnupg"
+        status.update(f"[dim]Creating backup at {backup_path}...[/dim]")
+
+        result = self._controller.create_backup(
+            key_id=self._state.key_id,
+            passphrase=self._state.passphrase,
+            backup_path=backup_path,
+        )
+
+        if result.is_err():
+            status.update(f"[red]Backup failed: {result.unwrap_err()}[/red]")
+            try:
+                backup_btn = self.query_one("#btn-backup", Button)
+                backup_btn.disabled = False
+            except Exception:
+                pass
+            return
+
+        manifest = result.unwrap()
+        file_count = len(manifest.files)
+        self._state.backup_complete = True
+
+        status.update(f"[green]Backup complete: {file_count} files created[/green]")
+
+        self._step_complete = True
+        self.query_one("#btn-next", Button).disabled = False
 
     def _go_back(self) -> None:
         """Navigate to the previous step."""
