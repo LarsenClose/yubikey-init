@@ -4243,3 +4243,27 @@ class TestRunManageCommand:
             result = run(["setup-config"])
             assert result == 0
             mock_cmd.assert_called_once()
+
+
+class TestVersionFlag:
+    """Test --version flag."""
+
+    def test_version_flag_exits_zero(self) -> None:
+        """Test that --version causes SystemExit with code 0."""
+        import pytest
+
+        parser = get_parser()
+        with pytest.raises(SystemExit) as exc_info:
+            parser.parse_args(["--version"])
+        assert exc_info.value.code == 0
+
+    def test_version_flag_output(self, capsys: object) -> None:
+        """Test that --version prints the version string."""
+        import pytest
+
+        parser = get_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args(["--version"])
+        captured = capsys.readouterr()  # type: ignore[union-attr]
+        assert "0.2.0" in captured.out
+        assert "yubikey-init" in captured.out

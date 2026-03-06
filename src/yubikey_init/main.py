@@ -24,9 +24,16 @@ console = Console()
 
 
 def get_parser() -> argparse.ArgumentParser:
+    from . import __version__
+
     parser = argparse.ArgumentParser(
         prog="yubikey-init",
         description="Automated YubiKey GPG initialization and management",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
     )
     parser.add_argument(
         "--state-file",
