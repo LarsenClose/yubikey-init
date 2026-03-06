@@ -1,12 +1,14 @@
 """Setup wizard screen for the YubiKey Management TUI.
 
 This screen provides a multi-step wizard that guides users through
-the complete YubiKey initialization process. Step 1 performs an
-environment verification check.
+the complete YubiKey initialization process. Steps include environment
+verification, identity configuration, passphrase setup, and key
+configuration.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from textual import work
@@ -14,9 +16,11 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import Screen
-from textual.widgets import Button, Footer, Header, Static
+from textual.widgets import Button, Footer, Header, Input, RadioButton, RadioSet, Static
 
 from ...environment import EnvironmentReport, verify_environment
+from ...prompts import PassphraseStrength, analyze_passphrase
+from ...types import KeyType, SecureString
 
 if TYPE_CHECKING:
     from ..controller import TUIController
@@ -25,15 +29,25 @@ if TYPE_CHECKING:
 _STEP_LABELS: dict[int, str] = {
     1: "Environment Check",
     2: "Identity Configuration",
-    3: "Key Generation",
-    4: "Subkey Creation",
-    5: "Key Backup",
-    6: "YubiKey Selection",
-    7: "Key Transfer",
-    8: "PIN Configuration",
+    3: "Passphrase Setup",
+    4: "Key Configuration",
+    5: "Storage Setup",
+    6: "Key Generation",
+    7: "Backup Creation",
+    8: "YubiKey Transfer",
     9: "Verification",
     10: "Summary",
 }
+
+
+@dataclass
+class WizardState:
+    """Accumulated state from wizard steps."""
+
+    identity: str | None = None
+    passphrase: SecureString | None = None
+    key_type: KeyType = KeyType.ED25519
+    expiry_years: int = 2
 
 
 class WizardScreen(Screen[None]):
@@ -131,6 +145,7 @@ class WizardScreen(Screen[None]):
         self._total_steps = 10
         self._env_report: EnvironmentReport | None = None
         self._step_complete = False
+        self._state = WizardState()
 
     @property
     def step_label(self) -> str:
@@ -176,6 +191,12 @@ class WizardScreen(Screen[None]):
         self._step_complete = False
         if self._current_step == 1:
             self._run_environment_check()
+        elif self._current_step == 2:
+            self._run_identity_step()
+        elif self._current_step == 3:
+            self._run_passphrase_step()
+        elif self._current_step == 4:
+            self._run_key_config_step()
         else:
             self._show_placeholder()
 
@@ -253,6 +274,197 @@ class WizardScreen(Screen[None]):
         next_btn.disabled = False
 
     @work(exclusive=True)
+    async def _run_identity_step(self) -> None:
+        """Run identity configuration step."""
+        content = self.query_one("#step-content", Vertical)
+        await content.remove_children()
+
+        await content.mount(Static("Identity Configuration", classes="section-title"))
+        await content.mount(
+            Static(
+                "Enter your name and email for the GPG key identity.",
+                classes="check-item",
+            )
+        )
+
+        # Pre-fill from state if navigating back
+        name_val = ""
+        email_val = ""
+        if self._state.identity:
+            # Parse "Name <email>" format
+            identity = self._state.identity
+            if "<" in identity and identity.endswith(">"):
+                name_val = identity[: identity.index("<")].strip()
+                email_val = identity[identity.index("<") + 1 : -1].strip()
+
+        await content.mount(
+            Static("Full Name:", classes="check-item"),
+        )
+        await content.mount(Input(value=name_val, placeholder="Your Name", id="input-name"))
+        await content.mount(
+            Static("Email Address:", classes="check-item"),
+        )
+        await content.mount(Input(value=email_val, placeholder="you@example.com", id="input-email"))
+        await content.mount(Static("", id="identity-preview", classes="check-item"))
+
+        self._update_identity_preview()
+
+    @work(exclusive=True)
+    async def _run_passphrase_step(self) -> None:
+        """Run passphrase setup step."""
+        content = self.query_one("#step-content", Vertical)
+        await content.remove_children()
+
+        await content.mount(Static("Master Key Passphrase", classes="section-title"))
+        await content.mount(
+            Static(
+                "Choose a strong passphrase to protect your master GPG key. "
+                "This passphrase encrypts the key at rest and is required for "
+                "key management operations.",
+                classes="check-item",
+            )
+        )
+
+        await content.mount(Static("Passphrase:", classes="check-item"))
+        await content.mount(
+            Input(password=True, placeholder="Enter passphrase", id="input-passphrase")
+        )
+        await content.mount(Static("Confirm Passphrase:", classes="check-item"))
+        await content.mount(
+            Input(
+                password=True,
+                placeholder="Confirm passphrase",
+                id="input-passphrase-confirm",
+            )
+        )
+        await content.mount(Static("", id="strength-feedback", classes="check-item"))
+
+    @work(exclusive=True)
+    async def _run_key_config_step(self) -> None:
+        """Run key configuration step."""
+        content = self.query_one("#step-content", Vertical)
+        await content.remove_children()
+
+        await content.mount(Static("Key Configuration", classes="section-title"))
+        await content.mount(
+            Static(
+                "Select the key algorithm and expiration period.",
+                classes="check-item",
+            )
+        )
+
+        await content.mount(Static("Key Algorithm:", classes="check-item"))
+        ed_selected = self._state.key_type == KeyType.ED25519
+        await content.mount(
+            RadioSet(
+                RadioButton("ED25519 (recommended)", value=ed_selected),
+                RadioButton("RSA 4096", value=not ed_selected),
+                id="key-type-radio",
+            )
+        )
+
+        await content.mount(Static("Expiry (years):", classes="check-item"))
+        await content.mount(
+            Input(
+                value=str(self._state.expiry_years),
+                placeholder="2",
+                id="input-expiry",
+            )
+        )
+
+        # Step 4 is always complete (defaults are valid)
+        self._step_complete = True
+        next_btn = self.query_one("#btn-next", Button)
+        next_btn.disabled = False
+
+    def on_input_changed(self, _event: Input.Changed) -> None:
+        """Handle input value changes for identity and passphrase steps."""
+        if self._current_step == 2:
+            self._update_identity_preview()
+        elif self._current_step == 3:
+            self._update_passphrase_strength()
+
+    def on_radio_set_changed(self, event: RadioSet.Changed) -> None:
+        """Handle radio set changes for key config step."""
+        if self._current_step == 4:
+            index = event.radio_set.pressed_index
+            self._state.key_type = KeyType.ED25519 if index == 0 else KeyType.RSA4096
+
+    def _update_identity_preview(self) -> None:
+        """Update the identity preview and Next button state."""
+        try:
+            name = self.query_one("#input-name", Input).value.strip()
+            email = self.query_one("#input-email", Input).value.strip()
+            preview = self.query_one("#identity-preview", Static)
+
+            if name and email:
+                preview.update(f"Identity: {name} <{email}>")
+                self._step_complete = True
+                self.query_one("#btn-next", Button).disabled = False
+            else:
+                preview.update("[dim]Enter both name and email to continue[/dim]")
+                self._step_complete = False
+                self.query_one("#btn-next", Button).disabled = True
+        except Exception:
+            pass
+
+    def _update_passphrase_strength(self) -> None:
+        """Update the passphrase strength feedback and Next button state."""
+        try:
+            passphrase = self.query_one("#input-passphrase", Input).value
+            confirm = self.query_one("#input-passphrase-confirm", Input).value
+            feedback_widget = self.query_one("#strength-feedback", Static)
+
+            if not passphrase:
+                feedback_widget.update("")
+                self._step_complete = False
+                self.query_one("#btn-next", Button).disabled = True
+                return
+
+            analysis = analyze_passphrase(passphrase)
+
+            # Build colored strength label
+            strength_labels = {
+                PassphraseStrength.WEAK: "[red]Weak[/red]",
+                PassphraseStrength.FAIR: "[yellow]Fair[/yellow]",
+                PassphraseStrength.GOOD: "[green]Good[/green]",
+                PassphraseStrength.STRONG: "[green]Strong[/green]",
+                PassphraseStrength.EXCELLENT: "[bold green]Excellent[/bold green]",
+            }
+            strength_text = strength_labels.get(analysis.strength, "Unknown")
+
+            parts = [f"Strength: {strength_text}"]
+            parts.append(f"  Entropy: {analysis.entropy_bits:.1f} bits")
+
+            if analysis.feedback:
+                suggestions = ", ".join(analysis.feedback[:3])
+                parts.append(f"  Suggestions: {suggestions}")
+
+            # Check match
+            matches = passphrase == confirm
+            if confirm and not matches:
+                parts.append("[red]Passphrases do not match[/red]")
+
+            feedback_widget.update("\n".join(parts))
+
+            # Enable next only when valid
+            valid = (
+                matches
+                and len(passphrase) >= 12
+                and analysis.strength
+                in (
+                    PassphraseStrength.FAIR,
+                    PassphraseStrength.GOOD,
+                    PassphraseStrength.STRONG,
+                    PassphraseStrength.EXCELLENT,
+                )
+            )
+            self._step_complete = valid
+            self.query_one("#btn-next", Button).disabled = not valid
+        except Exception:
+            pass
+
+    @work(exclusive=True)
     async def _show_placeholder(self) -> None:
         """Show placeholder content for unimplemented steps."""
         content = self.query_one("#step-content", Vertical)
@@ -283,10 +495,27 @@ class WizardScreen(Screen[None]):
             return
         if self._current_step >= self._total_steps:
             return
+        self._capture_step_state()
         self._current_step += 1
         self._update_step_indicator()
         self._update_nav_buttons()
         self._run_step()
+
+    def _capture_step_state(self) -> None:
+        """Capture current step's data into wizard state."""
+        try:
+            if self._current_step == 2:
+                name = self.query_one("#input-name", Input).value.strip()
+                email = self.query_one("#input-email", Input).value.strip()
+                self._state.identity = f"{name} <{email}>"
+            elif self._current_step == 3:
+                pw = self.query_one("#input-passphrase", Input).value
+                self._state.passphrase = SecureString(pw)
+            elif self._current_step == 4:
+                expiry_str = self.query_one("#input-expiry", Input).value.strip()
+                self._state.expiry_years = int(expiry_str) if expiry_str.isdigit() else 2
+        except Exception:
+            pass
 
     def action_cancel(self) -> None:
         """Cancel the wizard and return to the main menu."""
