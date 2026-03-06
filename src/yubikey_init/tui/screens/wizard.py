@@ -209,6 +209,10 @@ class WizardScreen(Screen[None]):
             self._run_backup_step()
         elif self._current_step == 8:
             self._run_transfer_step()
+        elif self._current_step == 9:
+            self._run_verification_step()
+        elif self._current_step == 10:
+            self._run_summary_step()
         else:
             self._show_placeholder()
 
@@ -689,6 +693,117 @@ class WizardScreen(Screen[None]):
             self.query_one("#btn-next", Button).disabled = not valid
         except Exception:
             pass
+
+    @work(exclusive=True)
+    async def _run_verification_step(self) -> None:
+        """Run verification step."""
+        content = self.query_one("#step-content", Vertical)
+        await content.remove_children()
+
+        await content.mount(Static("Verification", classes="section-title"))
+        await content.mount(
+            Static(
+                "Review the setup checklist before finalizing.",
+                classes="check-item",
+            )
+        )
+
+        # Check each configuration item
+        checks: list[tuple[str, str]] = []
+        if self._state.identity:
+            checks.append(("[green]OK[/green]", f"Identity: {self._state.identity}"))
+        else:
+            checks.append(("[red]X[/red]", "Identity: Not configured"))
+
+        if self._state.passphrase:
+            checks.append(("[green]OK[/green]", "Passphrase: Set"))
+        else:
+            checks.append(("[red]X[/red]", "Passphrase: Not set"))
+
+        key_type = self._state.key_type.value
+        checks.append(("[green]OK[/green]", f"Key type: {key_type}"))
+        checks.append(("[green]OK[/green]", f"Expiry: {self._state.expiry_years} years"))
+
+        if self._state.skip_storage:
+            checks.append(("[yellow]!![/yellow]", "Storage: Skipped"))
+        elif self._state.storage_path:
+            checks.append(("[green]OK[/green]", f"Storage: {self._state.storage_path}"))
+        else:
+            checks.append(("[yellow]!![/yellow]", "Storage: Not configured"))
+
+        if self._state.admin_pin and self._state.user_pin:
+            checks.append(("[green]OK[/green]", "YubiKey PINs: Configured"))
+        else:
+            checks.append(("[yellow]!![/yellow]", "YubiKey PINs: Not set"))
+
+        for icon, label in checks:
+            await content.mount(Static(f"  {icon} {label}", classes="check-item"))
+
+        await content.mount(Static("", classes="check-item"))
+        await content.mount(
+            Static(
+                "[dim]Proceed to Summary to review the complete configuration.[/dim]",
+                classes="check-item",
+            )
+        )
+
+        self._step_complete = True
+        self.query_one("#btn-next", Button).disabled = False
+
+    @work(exclusive=True)
+    async def _run_summary_step(self) -> None:
+        """Run summary step."""
+        content = self.query_one("#step-content", Vertical)
+        await content.remove_children()
+
+        await content.mount(Static("Setup Summary", classes="section-title"))
+        await content.mount(
+            Static(
+                "Your YubiKey initialization configuration is complete.",
+                classes="check-item",
+            )
+        )
+
+        # Display full config summary
+        identity = self._state.identity or "Not set"
+        key_type = self._state.key_type.value
+        expiry = f"{self._state.expiry_years} years"
+
+        if self._state.skip_storage:
+            storage = "Skipped"
+        elif self._state.storage_path:
+            storage = self._state.storage_path
+        else:
+            storage = "Default"
+
+        pins = "Configured" if self._state.admin_pin and self._state.user_pin else "Not set"
+
+        summary_lines = [
+            f"  Identity:  {identity}",
+            f"  Algorithm: {key_type}",
+            f"  Expiry:    {expiry}",
+            f"  Storage:   {storage}",
+            f"  PINs:      {pins}",
+        ]
+
+        for line in summary_lines:
+            await content.mount(Static(line, classes="check-item"))
+
+        await content.mount(Static("", classes="check-item"))
+        await content.mount(
+            Static(
+                "[dim]The wizard execution engine will perform these "
+                "operations when connected. You may close the wizard "
+                "now.[/dim]",
+                classes="check-item",
+            )
+        )
+
+        # On the final step, mark complete but change Next to disabled
+        # (there's nowhere to go). The user uses Cancel/Escape to close.
+        self._step_complete = True
+        next_btn = self.query_one("#btn-next", Button)
+        next_btn.disabled = True
 
     @work(exclusive=True)
     async def _show_placeholder(self) -> None:
