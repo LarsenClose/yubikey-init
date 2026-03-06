@@ -16,7 +16,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import Screen
-from textual.widgets import Button, Footer, Header, Input, RadioButton, RadioSet, Static
+from textual.widgets import Button, Checkbox, Footer, Header, Input, RadioButton, RadioSet, Static
 
 from ...environment import EnvironmentReport, verify_environment
 from ...prompts import PassphraseStrength, analyze_passphrase
@@ -48,6 +48,10 @@ class WizardState:
     passphrase: SecureString | None = None
     key_type: KeyType = KeyType.ED25519
     expiry_years: int = 2
+    skip_storage: bool = False
+    storage_path: str = ""
+    admin_pin: str = ""
+    user_pin: str = ""
 
 
 class WizardScreen(Screen[None]):
@@ -197,6 +201,14 @@ class WizardScreen(Screen[None]):
             self._run_passphrase_step()
         elif self._current_step == 4:
             self._run_key_config_step()
+        elif self._current_step == 5:
+            self._run_storage_step()
+        elif self._current_step == 6:
+            self._run_generation_step()
+        elif self._current_step == 7:
+            self._run_backup_step()
+        elif self._current_step == 8:
+            self._run_transfer_step()
         else:
             self._show_placeholder()
 
@@ -377,12 +389,226 @@ class WizardScreen(Screen[None]):
         next_btn = self.query_one("#btn-next", Button)
         next_btn.disabled = False
 
+    @work(exclusive=True)
+    async def _run_storage_step(self) -> None:
+        """Run storage setup step."""
+        content = self.query_one("#step-content", Vertical)
+        await content.remove_children()
+
+        await content.mount(Static("Storage Setup", classes="section-title"))
+        await content.mount(
+            Static(
+                "Configure a backup storage location for your GPG keys. "
+                "You can specify a directory path or skip this step to "
+                "back up later.",
+                classes="check-item",
+            )
+        )
+
+        await content.mount(
+            Static("Skip backup storage:", classes="check-item"),
+        )
+        skip_checked = self._state.skip_storage
+        await content.mount(
+            Checkbox(
+                "Skip storage setup",
+                value=skip_checked,
+                id="check-skip-storage",
+            )
+        )
+
+        await content.mount(Static("Backup directory path:", classes="check-item"))
+        await content.mount(
+            Input(
+                value=self._state.storage_path,
+                placeholder="/Volumes/backup-drive",
+                id="input-storage-path",
+                disabled=skip_checked,
+            )
+        )
+        await content.mount(Static("", id="storage-status", classes="check-item"))
+
+        # If skip is checked, step is immediately complete
+        if skip_checked:
+            self._step_complete = True
+            self.query_one("#btn-next", Button).disabled = False
+        else:
+            self._update_storage_status()
+
+    @work(exclusive=True)
+    async def _run_generation_step(self) -> None:
+        """Run key generation step."""
+        content = self.query_one("#step-content", Vertical)
+        await content.remove_children()
+
+        await content.mount(Static("Key Generation", classes="section-title"))
+        await content.mount(
+            Static(
+                "Review your configuration and generate GPG keys.",
+                classes="check-item",
+            )
+        )
+
+        # Show config summary
+        identity = self._state.identity or "Not set"
+        key_type = self._state.key_type.value
+        expiry = f"{self._state.expiry_years} years"
+
+        await content.mount(Static(f"  Identity: {identity}", classes="check-item"))
+        await content.mount(Static(f"  Algorithm: {key_type}", classes="check-item"))
+        await content.mount(Static(f"  Expiry: {expiry}", classes="check-item"))
+        await content.mount(Static("", classes="check-item"))
+        await content.mount(
+            Static(
+                "[dim]Key generation will be performed when the wizard "
+                "execution engine is connected.[/dim]",
+                id="generation-status",
+                classes="check-item",
+            )
+        )
+
+        self._step_complete = True
+        self.query_one("#btn-next", Button).disabled = False
+
+    @work(exclusive=True)
+    async def _run_backup_step(self) -> None:
+        """Run backup creation step."""
+        content = self.query_one("#step-content", Vertical)
+        await content.remove_children()
+
+        await content.mount(Static("Backup Creation", classes="section-title"))
+
+        if self._state.skip_storage:
+            await content.mount(
+                Static(
+                    "Storage setup was skipped. Backup will use the default GNUPG home directory.",
+                    classes="check-item",
+                )
+            )
+        else:
+            path = self._state.storage_path or "Not configured"
+            await content.mount(Static(f"  Backup path: {path}", classes="check-item"))
+
+        await content.mount(Static("", classes="check-item"))
+        await content.mount(
+            Static(
+                "[dim]Backup creation will be performed when the wizard "
+                "execution engine is connected.[/dim]",
+                id="backup-status",
+                classes="check-item",
+            )
+        )
+
+        self._step_complete = True
+        self.query_one("#btn-next", Button).disabled = False
+
+    @work(exclusive=True)
+    async def _run_transfer_step(self) -> None:
+        """Run YubiKey transfer step."""
+        content = self.query_one("#step-content", Vertical)
+        await content.remove_children()
+
+        await content.mount(Static("YubiKey Transfer", classes="section-title"))
+        await content.mount(
+            Static(
+                "Configure PINs for your YubiKey. The user PIN is for daily "
+                "operations (signing, encrypting). The admin PIN is for "
+                "management operations.",
+                classes="check-item",
+            )
+        )
+
+        await content.mount(Static("Admin PIN (8+ digits):", classes="check-item"))
+        await content.mount(
+            Input(
+                value=self._state.admin_pin,
+                password=True,
+                placeholder="Admin PIN",
+                id="input-admin-pin",
+            )
+        )
+        await content.mount(Static("User PIN (6+ digits):", classes="check-item"))
+        await content.mount(
+            Input(
+                value=self._state.user_pin,
+                password=True,
+                placeholder="User PIN",
+                id="input-user-pin",
+            )
+        )
+        await content.mount(Static("", id="transfer-status", classes="check-item"))
+
+        self._update_transfer_status()
+
+    def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
+        """Handle checkbox changes for storage step."""
+        if self._current_step == 5 and event.checkbox.id == "check-skip-storage":
+            self._state.skip_storage = event.value
+            try:
+                path_input = self.query_one("#input-storage-path", Input)
+                path_input.disabled = event.value
+            except Exception:
+                pass
+            if event.value:
+                self._step_complete = True
+                self.query_one("#btn-next", Button).disabled = False
+            else:
+                self._update_storage_status()
+
+    def _update_storage_status(self) -> None:
+        """Update storage path status and Next button."""
+        try:
+            path_val = self.query_one("#input-storage-path", Input).value.strip()
+            status = self.query_one("#storage-status", Static)
+            if path_val:
+                status.update(f"Backup path: {path_val}")
+                self._step_complete = True
+                self.query_one("#btn-next", Button).disabled = False
+            else:
+                status.update("[dim]Enter a backup path or skip to continue[/dim]")
+                self._step_complete = False
+                self.query_one("#btn-next", Button).disabled = True
+        except Exception:
+            pass
+
+    def _update_transfer_status(self) -> None:
+        """Update transfer PIN status and Next button."""
+        try:
+            admin = self.query_one("#input-admin-pin", Input).value
+            user = self.query_one("#input-user-pin", Input).value
+            status = self.query_one("#transfer-status", Static)
+
+            errors: list[str] = []
+            if admin and len(admin) < 8:
+                errors.append("Admin PIN must be 8+ digits")
+            if user and len(user) < 6:
+                errors.append("User PIN must be 6+ digits")
+
+            if errors:
+                status.update("[red]" + "; ".join(errors) + "[/red]")
+                self._step_complete = False
+                self.query_one("#btn-next", Button).disabled = True
+            elif admin and user:
+                status.update("[green]PINs configured[/green]")
+                self._step_complete = True
+                self.query_one("#btn-next", Button).disabled = False
+            else:
+                status.update("[dim]Enter both PINs to continue[/dim]")
+                self._step_complete = False
+                self.query_one("#btn-next", Button).disabled = True
+        except Exception:
+            pass
+
     def on_input_changed(self, _event: Input.Changed) -> None:
         """Handle input value changes for identity and passphrase steps."""
         if self._current_step == 2:
             self._update_identity_preview()
         elif self._current_step == 3:
             self._update_passphrase_strength()
+        elif self._current_step == 5:
+            self._update_storage_status()
+        elif self._current_step == 8:
+            self._update_transfer_status()
 
     def on_radio_set_changed(self, event: RadioSet.Changed) -> None:
         """Handle radio set changes for key config step."""
@@ -514,6 +740,13 @@ class WizardScreen(Screen[None]):
             elif self._current_step == 4:
                 expiry_str = self.query_one("#input-expiry", Input).value.strip()
                 self._state.expiry_years = int(expiry_str) if expiry_str.isdigit() else 2
+            elif self._current_step == 5:
+                self._state.storage_path = self.query_one(
+                    "#input-storage-path", Input
+                ).value.strip()
+            elif self._current_step == 8:
+                self._state.admin_pin = self.query_one("#input-admin-pin", Input).value
+                self._state.user_pin = self.query_one("#input-user-pin", Input).value
         except Exception:
             pass
 
