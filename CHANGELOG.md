@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Interactive TUI setup wizard with 10-step guided flow (`W` key from main menu)
+  - Step 1: Environment verification with live system checks
+  - Step 2: Identity configuration with name/email preview
+  - Step 3: Passphrase setup with real-time strength analysis
+  - Step 4: Key algorithm (ED25519/RSA4096) and expiry selection
+  - Step 5: Backup storage setup with skip option
+  - Step 6: Key generation summary
+  - Step 7: Backup creation with storage-aware messaging
+  - Step 8: YubiKey transfer with PIN validation (admin 8+, user 6+)
+  - Step 9: Verification checklist with status indicators
+  - Step 10: Final configuration summary
+- WizardState dataclass for accumulating configuration across steps
+- Back/Next/Cancel navigation with step-aware validation
+- Project CLAUDE.md with build and architecture reference
+
 ## [0.2.1] - 2026-03-06
 
 ### Added
