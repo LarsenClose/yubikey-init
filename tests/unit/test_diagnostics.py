@@ -1,15 +1,17 @@
 """Tests for diagnostics module."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 from yubikey_init.diagnostics import (
     DiagnosticInfo,
+    KeyExpiryEntry,
     analyze_issues,
     format_diagnostic_report,
     get_agent_info,
     get_card_info,
     get_gpg_info,
+    get_key_expiry_info,
     get_system_info,
     get_yubikey_info,
     restart_gpg_components,
@@ -18,6 +20,7 @@ from yubikey_init.diagnostics import (
 from yubikey_init.diagnostics import (
     test_card_operations as check_card_ops,
 )
+from yubikey_init.types import KeyInfo, KeyType, KeyUsage, Result, SubkeyInfo
 
 
 class TestDiagnosticInfo:
@@ -860,3 +863,248 @@ class TestRestartComponentsExtended:
 
         assert result.is_err()
         assert "Restart failed" in str(result.unwrap_err())
+
+
+def _make_diagnostic(**overrides: object) -> DiagnosticInfo:
+    """Helper to build a DiagnosticInfo with sensible defaults."""
+    defaults: dict[str, object] = {
+        "timestamp": datetime.now(UTC),
+        "system_info": {},
+        "gpg_info": {"installed": True, "agent_running": True},
+        "yubikey_info": {"ykman_installed": True, "devices": []},
+        "card_info": {},
+        "agent_info": {},
+    }
+    defaults.update(overrides)
+    return DiagnosticInfo(**defaults)  # type: ignore[arg-type]
+
+
+def _make_key_info(
+    key_id: str = "ABCD1234",
+    identity: str = "Test User <test@example.com>",
+    expiry_date: datetime | None = None,
+) -> KeyInfo:
+    return KeyInfo(
+        key_id=key_id,
+        fingerprint=key_id,
+        creation_date=datetime.now(UTC),
+        expiry_date=expiry_date,
+        identity=identity,
+        key_type=KeyType.ED25519,
+    )
+
+
+def _make_subkey_info(
+    key_id: str = "SUB1234",
+    parent_key_id: str = "ABCD1234",
+    usage: KeyUsage = KeyUsage.SIGN,
+    expiry_date: datetime | None = None,
+) -> SubkeyInfo:
+    return SubkeyInfo(
+        key_id=key_id,
+        fingerprint=key_id,
+        creation_date=datetime.now(UTC),
+        expiry_date=expiry_date,
+        usage=usage,
+        key_type=KeyType.ED25519,
+        parent_key_id=parent_key_id,
+    )
+
+
+class TestGetKeyExpiryInfo:
+    """Tests for get_key_expiry_info."""
+
+    @patch("yubikey_init.diagnostics.GPGOperations")
+    def test_expired_master_key(self, mock_gpg_cls: MagicMock) -> None:
+        """Test that an expired master key is detected."""
+        expired_date = datetime.now(UTC) - timedelta(days=10)
+        mock_gpg = mock_gpg_cls.return_value
+        mock_gpg.list_secret_keys.return_value = Result.ok(
+            [_make_key_info(expiry_date=expired_date)]
+        )
+        mock_gpg.list_subkeys.return_value = Result.ok([])
+
+        entries = get_key_expiry_info()
+
+        assert len(entries) == 1
+        assert entries[0].is_expired is True
+        assert entries[0].days_until_expiry is None
+
+    @patch("yubikey_init.diagnostics.GPGOperations")
+    def test_key_expiring_within_30_days(self, mock_gpg_cls: MagicMock) -> None:
+        """Test that a key expiring within 30 days is detected."""
+        future_date = datetime.now(UTC) + timedelta(days=15)
+        mock_gpg = mock_gpg_cls.return_value
+        mock_gpg.list_secret_keys.return_value = Result.ok(
+            [_make_key_info(expiry_date=future_date)]
+        )
+        mock_gpg.list_subkeys.return_value = Result.ok([])
+
+        entries = get_key_expiry_info()
+
+        assert len(entries) == 1
+        assert entries[0].is_expired is False
+        assert entries[0].days_until_expiry is not None
+        assert entries[0].days_until_expiry <= 30
+
+    @patch("yubikey_init.diagnostics.GPGOperations")
+    def test_key_expiring_within_90_days(self, mock_gpg_cls: MagicMock) -> None:
+        """Test that a key expiring within 90 days is detected."""
+        future_date = datetime.now(UTC) + timedelta(days=60)
+        mock_gpg = mock_gpg_cls.return_value
+        mock_gpg.list_secret_keys.return_value = Result.ok(
+            [_make_key_info(expiry_date=future_date)]
+        )
+        mock_gpg.list_subkeys.return_value = Result.ok([])
+
+        entries = get_key_expiry_info()
+
+        assert len(entries) == 1
+        assert entries[0].is_expired is False
+        assert entries[0].days_until_expiry is not None
+        assert entries[0].days_until_expiry <= 90
+
+    @patch("yubikey_init.diagnostics.GPGOperations")
+    def test_key_with_no_expiry(self, mock_gpg_cls: MagicMock) -> None:
+        """Test that keys without expiry are omitted."""
+        mock_gpg = mock_gpg_cls.return_value
+        mock_gpg.list_secret_keys.return_value = Result.ok([_make_key_info(expiry_date=None)])
+        mock_gpg.list_subkeys.return_value = Result.ok([])
+
+        entries = get_key_expiry_info()
+
+        assert len(entries) == 0
+
+    @patch("yubikey_init.diagnostics.GPGOperations")
+    def test_subkey_expiry_detected(self, mock_gpg_cls: MagicMock) -> None:
+        """Test that subkey expiry is detected."""
+        expired_date = datetime.now(UTC) - timedelta(days=5)
+        mock_gpg = mock_gpg_cls.return_value
+        mock_gpg.list_secret_keys.return_value = Result.ok([_make_key_info(expiry_date=None)])
+        mock_gpg.list_subkeys.return_value = Result.ok(
+            [_make_subkey_info(expiry_date=expired_date)]
+        )
+
+        entries = get_key_expiry_info()
+
+        assert len(entries) == 1
+        assert entries[0].is_expired is True
+        assert "Subkey" in entries[0].label
+
+    @patch("yubikey_init.diagnostics.GPGOperations")
+    def test_list_secret_keys_fails_gracefully(self, mock_gpg_cls: MagicMock) -> None:
+        """Test graceful handling when list_secret_keys fails."""
+        mock_gpg = mock_gpg_cls.return_value
+        mock_gpg.list_secret_keys.return_value = Result.err(RuntimeError("GPG not available"))
+
+        entries = get_key_expiry_info()
+
+        assert entries == []
+
+    @patch("yubikey_init.diagnostics.GPGOperations")
+    def test_list_subkeys_fails_gracefully(self, mock_gpg_cls: MagicMock) -> None:
+        """Test graceful handling when list_subkeys fails for a key."""
+        mock_gpg = mock_gpg_cls.return_value
+        mock_gpg.list_secret_keys.return_value = Result.ok([_make_key_info(expiry_date=None)])
+        mock_gpg.list_subkeys.return_value = Result.err(RuntimeError("Cannot list subkeys"))
+
+        entries = get_key_expiry_info()
+
+        # Should succeed with no entries, not crash
+        assert entries == []
+
+    @patch("yubikey_init.diagnostics.GPGOperations")
+    def test_constructor_exception_handled(self, mock_gpg_cls: MagicMock) -> None:
+        """Test graceful handling when GPGOperations constructor raises."""
+        mock_gpg_cls.side_effect = RuntimeError("Cannot init GPG")
+
+        entries = get_key_expiry_info()
+
+        assert entries == []
+
+
+class TestAnalyzeIssuesKeyExpiry:
+    """Tests for key expiry checks integrated into analyze_issues."""
+
+    @patch("yubikey_init.diagnostics.get_key_expiry_info")
+    def test_expired_key_creates_error_issue(self, mock_expiry: MagicMock) -> None:
+        """Test that an expired key generates an error-level issue."""
+        expired_date = datetime(2025, 1, 15, tzinfo=UTC)
+        mock_expiry.return_value = [
+            KeyExpiryEntry(
+                key_id="ABCD1234",
+                label="Master key ABCD1234 (Test User <test@example.com>)",
+                expiry_date=expired_date,
+                is_expired=True,
+                days_until_expiry=None,
+            )
+        ]
+        diagnostic = _make_diagnostic()
+
+        analyze_issues(diagnostic)
+
+        assert any("EXPIRED" in issue for issue in diagnostic.issues)
+        assert any("yubikey-init keys renew" in rec for rec in diagnostic.recommendations)
+
+    @patch("yubikey_init.diagnostics.get_key_expiry_info")
+    def test_key_expiring_in_30_days_creates_warning(self, mock_expiry: MagicMock) -> None:
+        """Test that a key expiring within 30 days generates a warning."""
+        future_date = datetime.now(UTC) + timedelta(days=20)
+        mock_expiry.return_value = [
+            KeyExpiryEntry(
+                key_id="ABCD1234",
+                label="Subkey SUB123 (sign) of ABCD1234",
+                expiry_date=future_date,
+                is_expired=False,
+                days_until_expiry=20,
+            )
+        ]
+        diagnostic = _make_diagnostic()
+
+        analyze_issues(diagnostic)
+
+        assert any("expiring soon" in issue for issue in diagnostic.issues)
+        assert any("before it expires" in rec for rec in diagnostic.recommendations)
+
+    @patch("yubikey_init.diagnostics.get_key_expiry_info")
+    def test_key_expiring_in_90_days_creates_info(self, mock_expiry: MagicMock) -> None:
+        """Test that a key expiring within 90 days generates an info-level issue."""
+        future_date = datetime.now(UTC) + timedelta(days=60)
+        mock_expiry.return_value = [
+            KeyExpiryEntry(
+                key_id="ABCD1234",
+                label="Master key ABCD1234 (Test User <test@example.com>)",
+                expiry_date=future_date,
+                is_expired=False,
+                days_until_expiry=60,
+            )
+        ]
+        diagnostic = _make_diagnostic()
+
+        analyze_issues(diagnostic)
+
+        assert any("Key expiring:" in issue for issue in diagnostic.issues)
+        assert any("Consider renewing" in rec for rec in diagnostic.recommendations)
+
+    @patch("yubikey_init.diagnostics.get_key_expiry_info")
+    def test_no_expiring_keys_no_extra_issues(self, mock_expiry: MagicMock) -> None:
+        """Test that no expiring keys produces no key-related issues."""
+        mock_expiry.return_value = []
+        diagnostic = _make_diagnostic()
+
+        analyze_issues(diagnostic)
+
+        assert not any("EXPIRED" in issue for issue in diagnostic.issues)
+        assert not any("expiring" in issue.lower() for issue in diagnostic.issues)
+
+    @patch("yubikey_init.diagnostics.get_key_expiry_info")
+    def test_expiry_check_exception_does_not_crash(self, mock_expiry: MagicMock) -> None:
+        """Test that an exception during expiry check does not crash analyze_issues."""
+        mock_expiry.side_effect = RuntimeError("GPG unavailable")
+        diagnostic = _make_diagnostic()
+
+        # Should not raise
+        analyze_issues(diagnostic)
+
+        # Other checks should still have run
+        assert not any("ykman" in issue for issue in diagnostic.issues)

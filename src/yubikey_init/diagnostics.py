@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import platform
 import shutil
@@ -9,7 +10,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .gpg_ops import GPGOperations
 from .types import Result
+
+logger = logging.getLogger(__name__)
 
 
 class DiagnosticError(Exception):
@@ -257,6 +261,76 @@ def get_agent_info() -> dict[str, Any]:
     return info
 
 
+@dataclass
+class KeyExpiryEntry:
+    """A single key or subkey with its expiry status."""
+
+    key_id: str
+    label: str
+    expiry_date: datetime | None
+    is_expired: bool
+    days_until_expiry: int | None
+
+
+def get_key_expiry_info() -> list[KeyExpiryEntry]:
+    """Check all secret keys and their subkeys for expiry status.
+
+    Returns a list of KeyExpiryEntry for every key/subkey that has an
+    expiry date set (keys without expiry are omitted).
+    """
+    entries: list[KeyExpiryEntry] = []
+    now = datetime.now(UTC)
+
+    try:
+        gpg = GPGOperations(gnupghome=None)
+        keys_result = gpg.list_secret_keys()
+        if keys_result.is_err():
+            logger.debug("Could not list secret keys: %s", keys_result.unwrap_err())
+            return entries
+
+        for key in keys_result.unwrap():
+            # Check master key expiry
+            if key.expiry_date is not None:
+                delta = key.expiry_date - now
+                entries.append(
+                    KeyExpiryEntry(
+                        key_id=key.key_id,
+                        label=f"Master key {key.key_id} ({key.identity})",
+                        expiry_date=key.expiry_date,
+                        is_expired=delta.total_seconds() < 0,
+                        days_until_expiry=delta.days if delta.total_seconds() >= 0 else None,
+                    )
+                )
+
+            # Check subkey expiry
+            subkeys_result = gpg.list_subkeys(key.key_id)
+            if subkeys_result.is_err():
+                logger.debug(
+                    "Could not list subkeys for %s: %s",
+                    key.key_id,
+                    subkeys_result.unwrap_err(),
+                )
+                continue
+
+            for subkey in subkeys_result.unwrap():
+                if subkey.expiry_date is not None:
+                    delta = subkey.expiry_date - now
+                    entries.append(
+                        KeyExpiryEntry(
+                            key_id=subkey.key_id,
+                            label=f"Subkey {subkey.key_id} ({subkey.usage.value}) of {key.key_id}",
+                            expiry_date=subkey.expiry_date,
+                            is_expired=delta.total_seconds() < 0,
+                            days_until_expiry=delta.days if delta.total_seconds() >= 0 else None,
+                        )
+                    )
+
+    except Exception:
+        logger.debug("Key expiry check failed", exc_info=True)
+
+    return entries
+
+
 def analyze_issues(diagnostic: DiagnosticInfo) -> None:
     """Analyze diagnostic info and identify issues/recommendations."""
     issues = diagnostic.issues
@@ -301,6 +375,32 @@ def analyze_issues(diagnostic: DiagnosticInfo) -> None:
         recommendations.append(
             "Check scdaemon.conf configuration and restart: gpgconf --kill scdaemon"
         )
+
+    # Key expiry checks
+    try:
+        expiry_entries = get_key_expiry_info()
+        for entry in expiry_entries:
+            if entry.is_expired:
+                issues.append(f"EXPIRED: {entry.label} expired on {entry.expiry_date:%Y-%m-%d}")
+                recommendations.append(f"Renew expired key {entry.key_id}: yubikey-init keys renew")
+            elif entry.days_until_expiry is not None and entry.days_until_expiry <= 30:
+                issues.append(
+                    f"Key expiring soon: {entry.label} expires in "
+                    f"{entry.days_until_expiry} days ({entry.expiry_date:%Y-%m-%d})"
+                )
+                recommendations.append(
+                    f"Renew key {entry.key_id} before it expires: yubikey-init keys renew"
+                )
+            elif entry.days_until_expiry is not None and entry.days_until_expiry <= 90:
+                issues.append(
+                    f"Key expiring: {entry.label} expires in "
+                    f"{entry.days_until_expiry} days ({entry.expiry_date:%Y-%m-%d})"
+                )
+                recommendations.append(
+                    f"Consider renewing key {entry.key_id}: yubikey-init keys renew"
+                )
+    except Exception:
+        logger.debug("Key expiry analysis failed", exc_info=True)
 
     # Platform-specific checks
     if diagnostic.system_info.get("platform") == "Linux":
