@@ -16,7 +16,7 @@ from .prompts import Prompts
 from .safety import SafetyGuard, SafetyLevel, display_device_table, list_connected_devices_safely
 from .state_machine import StateMachine, WorkflowConfig
 from .storage_ops import StorageOperations
-from .types import KeySlot, KeyType, SecureString, TouchPolicy, WorkflowState
+from .types import KeySlot, KeyType, KeyUsage, SecureString, TouchPolicy, WorkflowState
 from .yubikey_ops import YubiKeyOperations
 
 DEFAULT_STATE_PATH = Path.home() / ".config" / "yubikey-init" / "state.json"
@@ -196,6 +196,21 @@ def get_parser() -> argparse.ArgumentParser:
     # keys export-ssh
     keys_export_ssh = keys_subparsers.add_parser("export-ssh", help="Export SSH public key")
     keys_export_ssh.add_argument("key_id", nargs="?", help="Key ID to export SSH key from")
+
+    # keys check-expiry
+    keys_expiry = keys_subparsers.add_parser("check-expiry", help="Check key expiration status")
+    keys_expiry.add_argument(
+        "--warn-days",
+        type=int,
+        default=90,
+        help="Warn about keys expiring within N days (default: 90)",
+    )
+    keys_expiry.add_argument(
+        "--critical-days",
+        type=int,
+        default=30,
+        help="Critical threshold for keys expiring within N days (default: 30)",
+    )
 
     # ========== BACKUP COMMAND GROUP ==========
     backup_parser = subparsers.add_parser("backup", help="Backup operations")
@@ -1372,12 +1387,96 @@ def cmd_keys(args: argparse.Namespace, prompts: Prompts) -> int:
         console.print(ssh_result.unwrap())
         return 0
 
+    elif args.keys_command == "check-expiry":
+        warn_days: int = args.warn_days
+        critical_days: int = args.critical_days
+
+        console.print("[bold]Key Expiration Check[/bold]\n")
+
+        result = gpg.list_secret_keys()
+        if result.is_err():
+            console.print(f"[red]Error listing keys: {result.unwrap_err()}[/red]")
+            return 1
+
+        keys = result.unwrap()
+        if not keys:
+            console.print("[yellow]No keys found in keyring.[/yellow]")
+            return 0
+
+        now = datetime.now(UTC)
+        exit_code = 0
+        counts = {"ok": 0, "warning": 0, "critical": 0, "expired": 0}
+
+        usage_prefix = {
+            KeyUsage.SIGN: "[S]",
+            KeyUsage.ENCRYPT: "[E]",
+            KeyUsage.AUTHENTICATE: "[A]",
+            KeyUsage.CERTIFY: "[C]",
+        }
+
+        def _classify_expiry(
+            expiry: datetime | None,
+        ) -> str:
+            """Return a formatted status string and update counts/exit_code."""
+            nonlocal exit_code
+            if expiry is None:
+                counts["ok"] += 1
+                return "[dim]Never expires[/dim]"
+            days_left = (expiry - now).days
+            date_str = expiry.strftime("%Y-%m-%d")
+            if days_left < 0:
+                counts["expired"] += 1
+                exit_code = max(exit_code, 2)
+                return f"[bold red]EXPIRED[/bold red] ({-days_left} days ago)"
+            elif days_left <= critical_days:
+                counts["critical"] += 1
+                exit_code = max(exit_code, 1)
+                return (
+                    f"[bold yellow]CRITICAL: expires in {days_left} days ({date_str})[/bold yellow]"
+                )
+            elif days_left <= warn_days:
+                counts["warning"] += 1
+                return f"[yellow]WARNING: expires in {days_left} days ({date_str})[/yellow]"
+            else:
+                counts["ok"] += 1
+                return f"[green]OK[/green]: {date_str} ({days_left} days)"
+
+        for key in keys:
+            console.print(f"Master: {key.key_id} ({key.identity})")
+            master_status = _classify_expiry(key.expiry_date)
+            console.print(f"  Expires: {master_status}")
+
+            subkeys_result = gpg.list_subkeys(key.key_id)
+            if subkeys_result.is_ok() and subkeys_result.unwrap():
+                console.print("  Subkeys:")
+                for sub in subkeys_result.unwrap():
+                    prefix = usage_prefix.get(sub.usage, "[?]")
+                    sub_status = _classify_expiry(sub.expiry_date)
+                    console.print(f"    {prefix} {sub.key_id} - {sub_status}")
+            console.print("")
+
+        total = sum(counts.values())
+        parts: list[str] = []
+        if counts["ok"]:
+            parts.append(f"{counts['ok']} OK")
+        if counts["warning"]:
+            parts.append(f"{counts['warning']} warning")
+        if counts["critical"]:
+            parts.append(f"{counts['critical']} critical")
+        if counts["expired"]:
+            parts.append(f"{counts['expired']} expired")
+        summary = ", ".join(parts) if parts else "none"
+        console.print(f"[bold]{total} keys/subkeys checked:[/bold] {summary}")
+
+        return exit_code
+
     else:
         console.print("Usage: yubikey-init keys <command>")
         console.print("\nCommands:")
-        console.print("  list        List keys in keyring")
-        console.print("  renew       Renew expiring subkeys")
-        console.print("  export-ssh  Export SSH public key")
+        console.print("  list          List keys in keyring")
+        console.print("  renew         Renew expiring subkeys")
+        console.print("  export-ssh    Export SSH public key")
+        console.print("  check-expiry  Check key expiration status")
         return 0
 
 

@@ -4424,3 +4424,394 @@ class TestVersionFlag:
         captured = capsys.readouterr()  # type: ignore[union-attr]
         assert "0.3.0" in captured.out
         assert "yubikey-init" in captured.out
+
+
+class TestCmdKeysCheckExpiry:
+    """Test keys check-expiry command."""
+
+    def _make_key(
+        self,
+        key_id: str = "DEADBEEF1234",
+        identity: str = "Test User <test@example.com>",
+        expiry_date: datetime | None = None,
+        key_type: KeyType = KeyType.ED25519,
+    ) -> KeyInfo:
+        return KeyInfo(
+            key_id=key_id,
+            fingerprint="A" * 40,
+            creation_date=datetime(2025, 1, 1),
+            expiry_date=expiry_date,
+            identity=identity,
+            key_type=key_type,
+        )
+
+    def _make_subkey(
+        self,
+        key_id: str = "SUB1234",
+        usage: KeyUsage = KeyUsage.SIGN,
+        expiry_date: datetime | None = None,
+        parent_key_id: str = "DEADBEEF1234",
+    ) -> SubkeyInfo:
+        return SubkeyInfo(
+            key_id=key_id,
+            fingerprint="B" * 40,
+            creation_date=datetime(2025, 1, 1),
+            expiry_date=expiry_date,
+            usage=usage,
+            key_type=KeyType.ED25519,
+            parent_key_id=parent_key_id,
+        )
+
+    def test_all_keys_ok_exit_zero(self) -> None:
+        """Test all keys OK returns exit code 0 with OK in output."""
+        from datetime import UTC, timedelta
+
+        future = datetime.now(UTC) + timedelta(days=365)
+        key = self._make_key(expiry_date=future)
+        args = argparse.Namespace(
+            gnupghome=None, keys_command="check-expiry", warn_days=90, critical_days=30
+        )
+        prompts = MagicMock()
+
+        with (
+            patch("yubikey_init.main.GPGOperations") as mock_gpg_class,
+            patch("yubikey_init.main.console") as mock_console,
+        ):
+            mock_gpg = MagicMock()
+            mock_gpg.list_secret_keys.return_value = Result.ok([key])
+            mock_gpg.list_subkeys.return_value = Result.ok([])
+            mock_gpg_class.return_value = mock_gpg
+
+            result = cmd_keys(args, prompts)
+            assert result == 0
+            calls = " ".join(str(c) for c in mock_console.print.call_args_list)
+            assert "OK" in calls
+
+    def test_expired_key_exit_two(self) -> None:
+        """Test expired key returns exit code 2 with EXPIRED in output."""
+        from datetime import UTC, timedelta
+
+        past = datetime.now(UTC) - timedelta(days=10)
+        key = self._make_key(expiry_date=past)
+        args = argparse.Namespace(
+            gnupghome=None, keys_command="check-expiry", warn_days=90, critical_days=30
+        )
+        prompts = MagicMock()
+
+        with (
+            patch("yubikey_init.main.GPGOperations") as mock_gpg_class,
+            patch("yubikey_init.main.console") as mock_console,
+        ):
+            mock_gpg = MagicMock()
+            mock_gpg.list_secret_keys.return_value = Result.ok([key])
+            mock_gpg.list_subkeys.return_value = Result.ok([])
+            mock_gpg_class.return_value = mock_gpg
+
+            result = cmd_keys(args, prompts)
+            assert result == 2
+            calls = " ".join(str(c) for c in mock_console.print.call_args_list)
+            assert "EXPIRED" in calls
+
+    def test_critical_key_exit_one(self) -> None:
+        """Test key expiring within critical threshold returns exit code 1."""
+        from datetime import UTC, timedelta
+
+        critical = datetime.now(UTC) + timedelta(days=15)
+        key = self._make_key(expiry_date=critical)
+        args = argparse.Namespace(
+            gnupghome=None, keys_command="check-expiry", warn_days=90, critical_days=30
+        )
+        prompts = MagicMock()
+
+        with (
+            patch("yubikey_init.main.GPGOperations") as mock_gpg_class,
+            patch("yubikey_init.main.console") as mock_console,
+        ):
+            mock_gpg = MagicMock()
+            mock_gpg.list_secret_keys.return_value = Result.ok([key])
+            mock_gpg.list_subkeys.return_value = Result.ok([])
+            mock_gpg_class.return_value = mock_gpg
+
+            result = cmd_keys(args, prompts)
+            assert result == 1
+            calls = " ".join(str(c) for c in mock_console.print.call_args_list)
+            assert "CRITICAL" in calls
+
+    def test_warning_key_exit_zero(self) -> None:
+        """Test key within warn threshold but not critical returns exit code 0."""
+        from datetime import UTC, timedelta
+
+        warning = datetime.now(UTC) + timedelta(days=45)
+        key = self._make_key(expiry_date=warning)
+        args = argparse.Namespace(
+            gnupghome=None, keys_command="check-expiry", warn_days=90, critical_days=30
+        )
+        prompts = MagicMock()
+
+        with (
+            patch("yubikey_init.main.GPGOperations") as mock_gpg_class,
+            patch("yubikey_init.main.console") as mock_console,
+        ):
+            mock_gpg = MagicMock()
+            mock_gpg.list_secret_keys.return_value = Result.ok([key])
+            mock_gpg.list_subkeys.return_value = Result.ok([])
+            mock_gpg_class.return_value = mock_gpg
+
+            result = cmd_keys(args, prompts)
+            assert result == 0
+            calls = " ".join(str(c) for c in mock_console.print.call_args_list)
+            assert "WARNING" in calls
+
+    def test_no_expiry_shows_never(self) -> None:
+        """Test key with no expiry shows 'Never expires'."""
+        key = self._make_key(expiry_date=None)
+        args = argparse.Namespace(
+            gnupghome=None, keys_command="check-expiry", warn_days=90, critical_days=30
+        )
+        prompts = MagicMock()
+
+        with (
+            patch("yubikey_init.main.GPGOperations") as mock_gpg_class,
+            patch("yubikey_init.main.console") as mock_console,
+        ):
+            mock_gpg = MagicMock()
+            mock_gpg.list_secret_keys.return_value = Result.ok([key])
+            mock_gpg.list_subkeys.return_value = Result.ok([])
+            mock_gpg_class.return_value = mock_gpg
+
+            result = cmd_keys(args, prompts)
+            assert result == 0
+            calls = " ".join(str(c) for c in mock_console.print.call_args_list)
+            assert "Never expires" in calls
+
+    def test_custom_thresholds(self) -> None:
+        """Test custom --warn-days and --critical-days thresholds."""
+        from datetime import UTC, timedelta
+
+        # 50 days out: with default thresholds this is WARNING,
+        # but with warn_days=40 it should be OK
+        future = datetime.now(UTC) + timedelta(days=50)
+        key = self._make_key(expiry_date=future)
+        args = argparse.Namespace(
+            gnupghome=None, keys_command="check-expiry", warn_days=40, critical_days=10
+        )
+        prompts = MagicMock()
+
+        with (
+            patch("yubikey_init.main.GPGOperations") as mock_gpg_class,
+            patch("yubikey_init.main.console") as mock_console,
+        ):
+            mock_gpg = MagicMock()
+            mock_gpg.list_secret_keys.return_value = Result.ok([key])
+            mock_gpg.list_subkeys.return_value = Result.ok([])
+            mock_gpg_class.return_value = mock_gpg
+
+            result = cmd_keys(args, prompts)
+            assert result == 0
+            calls = " ".join(str(c) for c in mock_console.print.call_args_list)
+            assert "OK" in calls
+            assert "WARNING" not in calls
+
+    def test_custom_critical_threshold(self) -> None:
+        """Test custom critical threshold triggers CRITICAL for a key that would be WARNING."""
+        from datetime import UTC, timedelta
+
+        # 50 days out: with critical_days=60 this becomes CRITICAL
+        future = datetime.now(UTC) + timedelta(days=50)
+        key = self._make_key(expiry_date=future)
+        args = argparse.Namespace(
+            gnupghome=None, keys_command="check-expiry", warn_days=90, critical_days=60
+        )
+        prompts = MagicMock()
+
+        with (
+            patch("yubikey_init.main.GPGOperations") as mock_gpg_class,
+            patch("yubikey_init.main.console") as mock_console,
+        ):
+            mock_gpg = MagicMock()
+            mock_gpg.list_secret_keys.return_value = Result.ok([key])
+            mock_gpg.list_subkeys.return_value = Result.ok([])
+            mock_gpg_class.return_value = mock_gpg
+
+            result = cmd_keys(args, prompts)
+            assert result == 1
+            calls = " ".join(str(c) for c in mock_console.print.call_args_list)
+            assert "CRITICAL" in calls
+
+    def test_no_keys_found(self) -> None:
+        """Test no keys found returns exit code 0 with appropriate message."""
+        args = argparse.Namespace(
+            gnupghome=None, keys_command="check-expiry", warn_days=90, critical_days=30
+        )
+        prompts = MagicMock()
+
+        with (
+            patch("yubikey_init.main.GPGOperations") as mock_gpg_class,
+            patch("yubikey_init.main.console") as mock_console,
+        ):
+            mock_gpg = MagicMock()
+            mock_gpg.list_secret_keys.return_value = Result.ok([])
+            mock_gpg_class.return_value = mock_gpg
+
+            result = cmd_keys(args, prompts)
+            assert result == 0
+            calls = " ".join(str(c) for c in mock_console.print.call_args_list)
+            assert "No keys found" in calls
+
+    def test_mixed_keys_highest_severity(self) -> None:
+        """Test mixed keys return highest severity exit code."""
+        from datetime import UTC, timedelta
+
+        ok_key = self._make_key(
+            key_id="OK_KEY", expiry_date=datetime.now(UTC) + timedelta(days=365)
+        )
+        expired_key = self._make_key(
+            key_id="EXPIRED_KEY", expiry_date=datetime.now(UTC) - timedelta(days=10)
+        )
+        args = argparse.Namespace(
+            gnupghome=None, keys_command="check-expiry", warn_days=90, critical_days=30
+        )
+        prompts = MagicMock()
+
+        with (
+            patch("yubikey_init.main.GPGOperations") as mock_gpg_class,
+            patch("yubikey_init.main.console") as mock_console,
+        ):
+            mock_gpg = MagicMock()
+            mock_gpg.list_secret_keys.return_value = Result.ok([ok_key, expired_key])
+            mock_gpg.list_subkeys.return_value = Result.ok([])
+            mock_gpg_class.return_value = mock_gpg
+
+            result = cmd_keys(args, prompts)
+            assert result == 2  # Expired takes precedence
+            calls = " ".join(str(c) for c in mock_console.print.call_args_list)
+            assert "EXPIRED" in calls
+            assert "OK" in calls
+
+    def test_subkey_display_with_usage_prefix(self) -> None:
+        """Test subkeys display with correct [S], [E], [A] prefixes."""
+        from datetime import UTC, timedelta
+
+        future = datetime.now(UTC) + timedelta(days=365)
+        key = self._make_key(expiry_date=future)
+        subkeys = [
+            self._make_subkey(key_id="SUB_S", usage=KeyUsage.SIGN, expiry_date=future),
+            self._make_subkey(key_id="SUB_E", usage=KeyUsage.ENCRYPT, expiry_date=future),
+            self._make_subkey(key_id="SUB_A", usage=KeyUsage.AUTHENTICATE, expiry_date=None),
+        ]
+        args = argparse.Namespace(
+            gnupghome=None, keys_command="check-expiry", warn_days=90, critical_days=30
+        )
+        prompts = MagicMock()
+
+        with (
+            patch("yubikey_init.main.GPGOperations") as mock_gpg_class,
+            patch("yubikey_init.main.console") as mock_console,
+        ):
+            mock_gpg = MagicMock()
+            mock_gpg.list_secret_keys.return_value = Result.ok([key])
+            mock_gpg.list_subkeys.return_value = Result.ok(subkeys)
+            mock_gpg_class.return_value = mock_gpg
+
+            result = cmd_keys(args, prompts)
+            assert result == 0
+            calls = " ".join(str(c) for c in mock_console.print.call_args_list)
+            assert "[S]" in calls
+            assert "[E]" in calls
+            assert "[A]" in calls
+            assert "SUB_S" in calls
+            assert "SUB_E" in calls
+            assert "SUB_A" in calls
+
+    def test_expired_subkey_raises_exit_code(self) -> None:
+        """Test that an expired subkey raises exit code even if master is OK."""
+        from datetime import UTC, timedelta
+
+        future = datetime.now(UTC) + timedelta(days=365)
+        past = datetime.now(UTC) - timedelta(days=5)
+        key = self._make_key(expiry_date=future)
+        subkeys = [
+            self._make_subkey(key_id="SUB_EXP", usage=KeyUsage.SIGN, expiry_date=past),
+        ]
+        args = argparse.Namespace(
+            gnupghome=None, keys_command="check-expiry", warn_days=90, critical_days=30
+        )
+        prompts = MagicMock()
+
+        with (
+            patch("yubikey_init.main.GPGOperations") as mock_gpg_class,
+            patch("yubikey_init.main.console"),
+        ):
+            mock_gpg = MagicMock()
+            mock_gpg.list_secret_keys.return_value = Result.ok([key])
+            mock_gpg.list_subkeys.return_value = Result.ok(subkeys)
+            mock_gpg_class.return_value = mock_gpg
+
+            result = cmd_keys(args, prompts)
+            assert result == 2
+
+    def test_summary_line_shows_counts(self) -> None:
+        """Test summary line at end shows correct counts."""
+        from datetime import UTC, timedelta
+
+        ok_key = self._make_key(key_id="OK1", expiry_date=datetime.now(UTC) + timedelta(days=365))
+        warn_key = self._make_key(
+            key_id="WARN1", expiry_date=datetime.now(UTC) + timedelta(days=45)
+        )
+        args = argparse.Namespace(
+            gnupghome=None, keys_command="check-expiry", warn_days=90, critical_days=30
+        )
+        prompts = MagicMock()
+
+        with (
+            patch("yubikey_init.main.GPGOperations") as mock_gpg_class,
+            patch("yubikey_init.main.console") as mock_console,
+        ):
+            mock_gpg = MagicMock()
+            mock_gpg.list_secret_keys.return_value = Result.ok([ok_key, warn_key])
+            mock_gpg.list_subkeys.return_value = Result.ok([])
+            mock_gpg_class.return_value = mock_gpg
+
+            result = cmd_keys(args, prompts)
+            assert result == 0
+            calls = " ".join(str(c) for c in mock_console.print.call_args_list)
+            assert "2 keys/subkeys checked:" in calls
+            assert "1 OK" in calls
+            assert "1 warning" in calls
+
+    def test_list_keys_error_returns_one(self) -> None:
+        """Test error listing keys returns exit code 1."""
+        args = argparse.Namespace(
+            gnupghome=None, keys_command="check-expiry", warn_days=90, critical_days=30
+        )
+        prompts = MagicMock()
+
+        with (
+            patch("yubikey_init.main.GPGOperations") as mock_gpg_class,
+            patch("yubikey_init.main.console") as mock_console,
+        ):
+            mock_gpg = MagicMock()
+            mock_gpg.list_secret_keys.return_value = Result.err(Exception("GPG not available"))
+            mock_gpg_class.return_value = mock_gpg
+
+            result = cmd_keys(args, prompts)
+            assert result == 1
+            calls = " ".join(str(c) for c in mock_console.print.call_args_list)
+            assert "Error listing keys" in calls
+
+    def test_parser_check_expiry_defaults(self) -> None:
+        """Test check-expiry subparser has correct default arguments."""
+        parser = get_parser()
+        args = parser.parse_args(["keys", "check-expiry"])
+        assert args.keys_command == "check-expiry"
+        assert args.warn_days == 90
+        assert args.critical_days == 30
+
+    def test_parser_check_expiry_custom_args(self) -> None:
+        """Test check-expiry subparser accepts custom arguments."""
+        parser = get_parser()
+        args = parser.parse_args(
+            ["keys", "check-expiry", "--warn-days", "60", "--critical-days", "14"]
+        )
+        assert args.warn_days == 60
+        assert args.critical_days == 14
